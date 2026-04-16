@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 
 # --- 1. KONFIGURACJA STRONY ---
 st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
@@ -10,17 +10,11 @@ st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="�
 # --- 2. PROFESJONALNY CSS (ENTERPRISE THEME) ---
 st.markdown("""
 <style>
-    /* Tło całej aplikacji (jasny, chłodny szary) */
-    .stApp {
-        background-color: #f4f6f9;
-    }
+    /* Tło całej aplikacji */
+    .stApp { background-color: #f4f6f9; }
 
     /* Globalne marginesy */
-    .block-container {
-        padding-top: 2rem; 
-        max-width: 98%; 
-        padding-bottom: 2rem;
-    }
+    .block-container { padding-top: 2rem; max-width: 98%; padding-bottom: 2rem; }
     
     /* Ukrycie menu Streamlit */
     #MainMenu {visibility: hidden;} 
@@ -28,7 +22,7 @@ st.markdown("""
     footer {visibility: hidden;} 
     [data-testid="collapsedControl"] {display: none !important;} 
     
-    /* Profesjonalne kafelki (Karty) z głębokim cieniem i bez ostrych ramek */
+    /* Profesjonalne kafelki (Karty) z głębokim cieniem */
     div[data-testid="stVerticalBlock"] div[style*="border"] {
         border-radius: 16px !important;
         background-color: #ffffff !important;
@@ -43,9 +37,9 @@ st.markdown("""
         box-shadow: 0 20px 40px -5px rgba(15, 23, 42, 0.12) !important;
     }
     
-    /* Stylizacja głównych przycisków akcji (Ciemnoniebieskie) */
+    /* Stylizacja głównych przycisków akcji */
     button[kind="primary"] {
-        background-color: #1e3a8a !important; /* Głęboki granat */
+        background-color: #1e3a8a !important; 
         color: #ffffff !important;
         border-radius: 8px !important;
         border: none !important;
@@ -55,15 +49,12 @@ st.markdown("""
         transition: all 0.2s;
     }
     button[kind="primary"]:hover {
-        background-color: #172554 !important; /* Jeszcze ciemniejszy po najechaniu */
+        background-color: #172554 !important; 
         box-shadow: 0 6px 15px rgba(30, 58, 138, 0.3) !important;
     }
     
     /* Stylizacja metryk (Dashboard Szefa) */
-    div[data-testid="stMetricValue"] {
-        color: #1e3a8a !important;
-        font-weight: 800 !important;
-    }
+    div[data-testid="stMetricValue"] { color: #1e3a8a !important; font-weight: 800 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,6 +92,8 @@ def restore_from_history(order_id):
     if order:
         if 'data_pakowania' in order: del order['data_pakowania']
         zam.append(order)
+        # Zawsze sortujemy po terminie przy przywracaniu
+        zam.sort(key=lambda x: x.get('termin', '9999-12-31'))
         hist = [x for x in hist if x['id'] != order_id]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
@@ -146,15 +139,19 @@ else:
 
         zam_data = load_data(ZAM_FILE)
         hist_data = load_data(HIST_FILE)
+        dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
-        dzisiaj = datetime.now().strftime("%Y-%m-%d")
-        spakowane_dzisiaj = sum(1 for h in hist_data if h.get('data_pakowania', '').startswith(dzisiaj))
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric(label="W kolejce do spakowania", value=len(zam_data))
-        m2.metric(label="Spakowane dzisiaj", value=spakowane_dzisiaj)
-        m3.metric(label="Wszystkie w historii", value=len(hist_data))
+        # Obliczenia do metryk
+        do_spakowania_dzisiaj = sum(1 for z in zam_data if z.get('termin') == dzisiaj_str or z.get('termin', '9999-12-31') < dzisiaj_str)
+        spakowane_dzisiaj = sum(1 for h in hist_data if h.get('data_pakowania', '').startswith(dzisiaj_str))
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(label="Wszystkie w kolejce", value=len(zam_data))
+        m2.metric(label="Wymagane na dzisiaj", value=do_spakowania_dzisiaj)
+        m3.metric(label="Spakowane dzisiaj", value=spakowane_dzisiaj)
+        m4.metric(label="Cała historia", value=len(hist_data))
         st.divider()
         
         t1, t2 = st.tabs(["➕ Nowe Zlecenie", "🗄️ Baza Historyczna"])
@@ -165,6 +162,7 @@ else:
                 with st.form("add_form", clear_on_submit=True):
                     st.markdown("#### Utwórz nowe zlecenie kompletacji")
                     nr = st.text_input("Indeks / Numer zamówienia", placeholder="np. ZAM/2026/04/16-01")
+                    termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     co = st.text_area("Specyfikacja (co spakować)", placeholder="Wprowadź listę produktów...")
                     
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
@@ -172,7 +170,14 @@ else:
                             if len(zam_data) > 0 and zam_data[-1]['nr'] == nr:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
-                                zam_data.append({"id": str(uuid.uuid4()), "nr": nr, "co": co})
+                                zam_data.append({
+                                    "id": str(uuid.uuid4()), 
+                                    "nr": nr, 
+                                    "co": co, 
+                                    "termin": termin.strftime("%Y-%m-%d")
+                                })
+                                # Sortowanie: Zlecenia z najszybszym terminem lądują na początku kolejki
+                                zam_data.sort(key=lambda x: x.get('termin', '9999-12-31'))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
@@ -185,7 +190,7 @@ else:
                 st.info("Brak wpisów w dzienniku.")
             else:
                 for h in hist_data:
-                    with st.expander(f"ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
+                    with st.expander(f"ZAM: {h['nr']}  |  Termin pierwotny: {h.get('termin', 'Brak')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         col_info.markdown(f"**Szczegóły zlecenia:**<br>{h['co']}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
@@ -213,6 +218,7 @@ else:
             st.rerun()
 
         tab_kds, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "🕒 OSTATNIE OPERACJE"])
+        dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         with tab_kds:
             zam = load_data(ZAM_FILE)
@@ -228,10 +234,21 @@ else:
                 for i, z in enumerate(zam):
                     with cols[i % 3]:
                         with st.container(border=True):
+                            # Inteligentne Etykiety Terminów (Badges)
+                            termin_zlecenia = z.get('termin', '9999-12-31')
+                            
+                            if termin_zlecenia < dzisiaj_str:
+                                badge_html = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {termin_zlecenia}</div>"
+                            elif termin_zlecenia == dzisiaj_str:
+                                badge_html = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
+                            else:
+                                badge_html = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {termin_zlecenia}</div>"
+
                             st.markdown(f"""
                             <div style='text-align:center;'>
+                                {badge_html}
                                 <div style='color: #64748b; font-size: 14px; text-transform: uppercase; font-weight: bold; letter-spacing: 1px;'>Zlecenie Nr</div>
-                                <div style='font-size: 55px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; color: #0f172a;'>{z['nr']}</div>
+                                <div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; color: #0f172a;'>{z['nr']}</div>
                                 <hr style='margin: 15px 0; border: none; border-top: 1px dashed #cbd5e1;'>
                                 <div style='font-size: 20px; font-weight: 600; margin-bottom: 25px; color: #334155;'>{z['co']}</div>
                             </div>
@@ -248,7 +265,7 @@ else:
                 st.info("Brak historii z dzisiejszej zmiany.")
             else:
                 for h in hist:
-                    with st.expander(f"✔️ ZAM: {h['nr']}  |  {h.get('data_pakowania', '')}"):
+                    with st.expander(f"✔️ ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', '')}"):
                         col1, col2 = st.columns([3, 1])
                         col1.write(f"**Zawartość:** {h['co']}")
                         if col2.button("Cofnij zlecenie na ekran", key=f"w_undo_{h['id']}", use_container_width=True):
