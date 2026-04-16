@@ -3,8 +3,8 @@ import json
 import os
 import uuid
 
-# Konfiguracja strony
-st.set_page_config(page_title="System Pakowni", page_icon="📦", layout="centered")
+# Zmiana layoutu na 'wide' - aplikacja zajmie cały ekran (idealne dla monitorów na produkcji)
+st.set_page_config(page_title="System Pakowni", page_icon="📦", layout="wide")
 
 DATA_FILE = "zamowienia.json"
 
@@ -33,39 +33,41 @@ def update_state():
 if 'orders' not in st.session_state:
     st.session_state.orders = load_orders()
 
-# Zmienna przechowująca informację, kto jest zalogowany (None, 'szef' lub 'pracownik')
 if 'rola' not in st.session_state:
     st.session_state.rola = None
 
 # --- EKRAN LOGOWANIA ---
 if st.session_state.rola is None:
-    st.title("🔐 Logowanie do systemu")
-    st.write("Wprowadź hasło, aby uzyskać dostęp do swojego panelu.")
-    
-    with st.form("formularz_logowania"):
-        wpisane_haslo = st.text_input("Hasło", type="password")
-        zaloguj_btn = st.form_submit_button("Zaloguj")
+    # Wyśrodkowanie logowania mimo szerokiego ekranu
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔐 Logowanie do systemu")
+        st.write("Wprowadź hasło, aby uzyskać dostęp do swojego panelu.")
         
-        if zaloguj_btn:
-            if wpisane_haslo == HASLO_SZEFA:
-                st.session_state.rola = 'szef'
-                st.rerun() # Przeładowuje stronę po zalogowaniu
-            elif wpisane_haslo == HASLO_PRACOWNIKA:
-                st.session_state.rola = 'pracownik'
-                st.rerun()
-            else:
-                st.error("Błędne hasło! Spróbuj ponownie.")
+        with st.form("formularz_logowania"):
+            wpisane_haslo = st.text_input("Hasło", type="password")
+            zaloguj_btn = st.form_submit_button("Zaloguj", use_container_width=True)
+            
+            if zaloguj_btn:
+                if wpisane_haslo == HASLO_SZEFA:
+                    st.session_state.rola = 'szef'
+                    st.rerun()
+                elif wpisane_haslo == HASLO_PRACOWNIKA:
+                    st.session_state.rola = 'pracownik'
+                    st.rerun()
+                else:
+                    st.error("Błędne hasło! Spróbuj ponownie.")
 
 # --- WIDOKI PO ZALOGOWANIU ---
 else:
-    # PASEK BOCZNY - PRZYCISK WYLOGOWANIA
-    st.sidebar.title(f"Zalogowano jako: {'Szef 👨‍💼' if st.session_state.rola == 'szef' else 'Pracownik 📦'}")
-    if st.sidebar.button("Wyloguj się"):
-        st.session_state.rola = None
-        st.rerun()
-
     # --- PANEL SZEFA ---
     if st.session_state.rola == 'szef':
+        # Pasek boczny tylko dla szefa
+        st.sidebar.title("Zalogowano jako: Szef 👨‍💼")
+        if st.sidebar.button("Wyloguj się", use_container_width=True):
+            st.session_state.rola = None
+            st.rerun()
+
         st.title("👨‍💼 Panel Szefa - Dodaj zamówienie")
         
         with st.form("dodaj_zamowienie", clear_on_submit=True):
@@ -80,7 +82,6 @@ else:
                         "nr": nr_zamowienia,
                         "co": co_spakowac
                     }
-                    
                     aktualne_zamowienia = load_orders()
                     aktualne_zamowienia.insert(0, nowe_zamowienie)
                     save_orders(aktualne_zamowienia)
@@ -90,32 +91,44 @@ else:
                     st.error("Wypełnij oba pola przed dodaniem zamówienia!")
                     
         st.divider()
-        st.subheader("Aktualnie w kolejce u pracowników:")
         aktualne_zamowienia = load_orders()
-        st.write(f"Liczba paczek do spakowania: **{len(aktualne_zamowienia)}**")
+        st.info(f"📦 Aktualnie w kolejce u pracowników: **{len(aktualne_zamowienia)} paczek**")
 
-    # --- PANEL PRACOWNIKA ---
+    # --- PANEL PRACOWNIKA (CZYSTY EKRAN KIOSKOWY) ---
     elif st.session_state.rola == 'pracownik':
-        st.title("📦 Panel Pakowni")
-        
-        col1, col2 = st.columns([4, 1])
-        with col2:
-            if st.button("🔄 Odśwież listę"):
+        # Górny pasek: Tytuł po lewej, przyciski po prawej
+        col_tytul, col_btn1, col_btn2 = st.columns([6, 1, 1])
+        with col_tytul:
+            st.title("📦 Ekran Pakowni")
+        with col_btn1:
+            if st.button("🔄 Odśwież", use_container_width=True):
                 update_state()
+        with col_btn2:
+            if st.button("Wyloguj", use_container_width=True):
+                st.session_state.rola = None
+                st.rerun()
+                
+        st.markdown("---")
         
         aktualne_zamowienia = load_orders()
         
         if not aktualne_zamowienia:
-            st.success("Brak zamówień do spakowania. Dobra robota, możecie odpocząć!")
+            st.success("Brak zamówień do spakowania. Można odpocząć!")
         else:
+            # Wyświetlanie zamówień jako wyraźne kafelki na cały ekran
             for z in aktualne_zamowienia:
-                with st.container():
-                    st.subheader(f"Numer: {z['nr']}")
-                    st.write(f"**Zawartość:** {z['co']}")
+                with st.container(border=True): # Tworzy widoczną ramkę wokół zamówienia
+                    col_info, col_akcja = st.columns([4, 1])
                     
-                    if st.button(f"✓ Zrobione (Spakowane)", key=z['id']):
-                        aktualne_zamowienia = [item for item in aktualne_zamowienia if item['id'] != z['id']]
-                        save_orders(aktualne_zamowienia)
-                        update_state()
-                        st.rerun()
-                    st.divider()
+                    with col_info:
+                        st.subheader(f"Zamówienie: {z['nr']}")
+                        st.write(f"**Do spakowania:** {z['co']}")
+                        
+                    with col_akcja:
+                        st.write("") # Pusty wiersz dla wyśrodkowania w pionie
+                        # type="primary" nadaje przyciskowi wyraźny, główny kolor (zazwyczaj czerwony/niebieski w zależności od motywu)
+                        if st.button("✅ ZROBIONE", key=z['id'], use_container_width=True, type="primary"):
+                            aktualne_zamowienia = [item for item in aktualne_zamowienia if item['id'] != z['id']]
+                            save_orders(aktualne_zamowienia)
+                            update_state()
+                            st.rerun()
