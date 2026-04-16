@@ -150,9 +150,11 @@ else:
     #             PANEL ADMINISTRATORA
     # ==========================================
     if st.session_state.rola == 'szef':
-        # ZMIANA: Przycisk wylogowania wyciągnięty z ukrytego menu bocznego
-        col_user, col_logout = st.columns([8, 2])
-        col_user.markdown("**Użytkownik:** Administrator 👨‍💼")
+        
+        # --- ZMIANA: Przycisk wylogowania wyciągnięty z ukrytego menu bocznego ---
+        col_title, col_user, col_logout = st.columns([6, 2, 1])
+        col_title.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
+        col_user.markdown("<div style='text-align: right; margin-top: 10px;'><b>Użytkownik:</b> Admin 👨‍💼</div>", unsafe_allow_html=True)
         if col_logout.button("Wyloguj się", use_container_width=True):
             st.session_state.rola = None
             st.rerun()
@@ -198,19 +200,18 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                pdf_b64 = ""
+                                has_label = False
                                 
-                                # ZMIANA: Zapis etykiety jako tekst do Arkusza Google
                                 if plik_etykiety is not None:
-                                    pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
-                                    if len(pdf_b64) > 48000:
-                                        st.error("Plik PDF za duży dla Arkusza Google (limit 50k znaków).")
-                                        st.stop()
+                                    sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
+                                    with open(sciezka_pdf, "wb") as f:
+                                        f.write(plik_etykiety.getbuffer())
+                                    has_label = True
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": pdf_b64
+                                    "ma_etykiete": has_label
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
@@ -228,12 +229,7 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        
-                        # ZMIANA: Inteligentne sprawdzanie czy PDF jest wgrany
-                        etyk = str(z.get('ma_etykiete', ''))
-                        if len(etyk) > 10 and etyk.lower() != 'false': 
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
-                            
+                        if str(z.get('ma_etykiete')).lower() == 'true': info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -374,20 +370,17 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # ZMIANA: Pobieranie PDF z Arkusza Google
-                            pdf_data = str(z.get('ma_etykiete', ''))
-                            if len(pdf_data) > 10 and pdf_data.lower() != 'false':
-                                try:
-                                    pdf_bytes = base64.b64decode(pdf_data)
-                                    st.download_button(
-                                        label="🖨️ OTWÓRZ ETYKIETĘ",
-                                        data=pdf_bytes,
-                                        file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                        mime="application/pdf",
-                                        use_container_width=True
-                                    )
-                                except Exception:
-                                    st.error("Błąd odczytu pliku PDF")
+                            if str(z.get('ma_etykiete')).lower() == 'true':
+                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
+                                if os.path.exists(sciezka_pdf):
+                                    with open(sciezka_pdf, "rb") as file:
+                                        st.download_button(
+                                            label="🖨️ OTWÓRZ ETYKIETĘ",
+                                            data=file,
+                                            file_name=f"Etykieta_{z.get('nr')}.pdf",
+                                            mime="application/pdf",
+                                            use_container_width=True
+                                        )
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
