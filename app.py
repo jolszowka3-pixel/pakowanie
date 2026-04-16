@@ -7,32 +7,62 @@ from datetime import datetime
 # --- 1. KONFIGURACJA STRONY ---
 st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
-# --- 2. PROFESJONALNY CSS (Globalny) ---
+# --- 2. PROFESJONALNY CSS (ENTERPRISE THEME) ---
 st.markdown("""
 <style>
+    /* Tło całej aplikacji (jasny, chłodny szary) */
+    .stApp {
+        background-color: #f4f6f9;
+    }
+
     /* Globalne marginesy */
-    .block-container {padding-top: 2rem; max-width: 98%; padding-bottom: 2rem;}
+    .block-container {
+        padding-top: 2rem; 
+        max-width: 98%; 
+        padding-bottom: 2rem;
+    }
     
-    /* Profesjonalne kafelki (Karty) z efektem cienia */
+    /* Ukrycie menu Streamlit */
+    #MainMenu {visibility: hidden;} 
+    header {visibility: hidden;} 
+    footer {visibility: hidden;} 
+    [data-testid="collapsedControl"] {display: none !important;} 
+    
+    /* Profesjonalne kafelki (Karty) z głębokim cieniem i bez ostrych ramek */
     div[data-testid="stVerticalBlock"] div[style*="border"] {
-        border-radius: 12px !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
-        border: 1px solid #f0f0f0 !important;
-        background-color: #ffffff;
-        transition: transform 0.1s ease-in-out, box-shadow 0.1s ease-in-out;
+        border-radius: 16px !important;
+        background-color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.08) !important;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
     
-    /* Efekt najechania myszką (Hover) */
+    /* Animacja uniesienia kafelka (Hover) */
     div[data-testid="stVerticalBlock"] div[style*="border"]:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 15px rgba(0,0,0,0.1) !important;
+        transform: translateY(-4px);
+        box-shadow: 0 20px 40px -5px rgba(15, 23, 42, 0.12) !important;
     }
     
-    /* Stylizacja metryk w Dashboardzie */
+    /* Stylizacja głównych przycisków akcji (Ciemnoniebieskie) */
+    button[kind="primary"] {
+        background-color: #1e3a8a !important; /* Głęboki granat */
+        color: #ffffff !important;
+        border-radius: 8px !important;
+        border: none !important;
+        box-shadow: 0 4px 10px rgba(30, 58, 138, 0.2) !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.5px;
+        transition: all 0.2s;
+    }
+    button[kind="primary"]:hover {
+        background-color: #172554 !important; /* Jeszcze ciemniejszy po najechaniu */
+        box-shadow: 0 6px 15px rgba(30, 58, 138, 0.3) !important;
+    }
+    
+    /* Stylizacja metryk (Dashboard Szefa) */
     div[data-testid="stMetricValue"] {
-        font-size: 2rem !important;
+        color: #1e3a8a !important;
         font-weight: 800 !important;
-        color: #1f77b4;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -80,13 +110,12 @@ if 'rola' not in st.session_state:
     st.session_state.rola = None
 
 if st.session_state.rola is None:
-    # Wyśrodkowany ekran logowania
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
         with st.container(border=True):
-            st.markdown("<h2 style='text-align: center; color: #333;'>WMS • Pakownia</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: #666;'>Zaloguj się, aby uzyskać dostęp</p>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center; color: #1e3a8a; font-weight: 800;'>WMS • Pakownia</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: #64748b;'>Zaloguj się do systemu magazynowego</p>", unsafe_allow_html=True)
             st.write("")
             with st.form("login_form"):
                 h = st.text_input("Hasło dostępu", type="password")
@@ -108,7 +137,6 @@ else:
     # ==========================================
     if st.session_state.rola == 'szef':
         
-        # Pasek boczny TYLKO dla Szefa
         with st.sidebar:
             st.markdown("**Użytkownik:** Administrator 👨‍💼")
             st.divider()
@@ -119,8 +147,7 @@ else:
         zam_data = load_data(ZAM_FILE)
         hist_data = load_data(HIST_FILE)
         
-        # --- DASHBOARD (METRYKI) ---
-        st.markdown("### 📊 Przegląd Operacyjny")
+        st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
         dzisiaj = datetime.now().strftime("%Y-%m-%d")
         spakowane_dzisiaj = sum(1 for h in hist_data if h.get('data_pakowania', '').startswith(dzisiaj))
         
@@ -130,7 +157,6 @@ else:
         m3.metric(label="Wszystkie w historii", value=len(hist_data))
         st.divider()
         
-        # --- ZAKŁADKI ---
         t1, t2 = st.tabs(["➕ Nowe Zlecenie", "🗄️ Baza Historyczna"])
 
         with t1:
@@ -141,7 +167,7 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia", placeholder="np. ZAM/2026/04/16-01")
                     co = st.text_area("Specyfikacja (co spakować)", placeholder="Wprowadź listę produktów...")
                     
-                    if st.form_submit_button("PRZEKAŻ NA MAGAZYN ➔", type="primary"):
+                    if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
                             if len(zam_data) > 0 and zam_data[-1]['nr'] == nr:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
@@ -162,7 +188,7 @@ else:
                     with st.expander(f"ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         col_info.markdown(f"**Szczegóły zlecenia:**<br>{h['co']}", unsafe_allow_html=True)
-                        if col_action.button("Przywróć", key=f"boss_{h['id']}", use_container_width=True):
+                        if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.toast("Zlecenie cofnięte na produkcję.", icon="🔄")
                             st.rerun()
@@ -179,19 +205,8 @@ else:
     # ==========================================
     elif st.session_state.rola == 'pracownik':
         
-        # CSS ukrywający menu, stopkę ORAZ całkowicie wyłączający przycisk paska bocznego
-        st.markdown("""
-        <style>
-            #MainMenu {visibility: hidden;} 
-            header {visibility: hidden;} 
-            footer {visibility: hidden;} 
-            [data-testid="collapsedControl"] {display: none !important;} 
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Nawigacja pracownika
         c1, c2, c3 = st.columns([6, 1, 1])
-        c1.markdown("<h2 style='color: #1f77b4; margin-top: -15px;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
+        c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
         if c2.button("🔄 Odśwież", use_container_width=True): st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
@@ -199,14 +214,13 @@ else:
 
         tab_kds, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "🕒 OSTATNIE OPERACJE"])
 
-        # EKRAN GŁÓWNY PAKOWNI
         with tab_kds:
             zam = load_data(ZAM_FILE)
             if not zam:
                 st.markdown("""
                 <div style='text-align: center; padding: 100px 0;'>
-                    <h1 style='font-size: 50px; color: #ccc;'>Brak aktywnych zleceń</h1>
-                    <p style='color: #888;'>Kolejka jest pusta. Oczekuj na nowe zadania.</p>
+                    <h1 style='font-size: 40px; color: #94a3b8;'>Brak aktywnych zleceń</h1>
+                    <p style='color: #cbd5e1; font-size: 20px;'>Kolejka jest pusta. Oczekuj na nowe zadania.</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
@@ -216,10 +230,10 @@ else:
                         with st.container(border=True):
                             st.markdown(f"""
                             <div style='text-align:center;'>
-                                <div style='color: #666; font-size: 14px; text-transform: uppercase;'>Zlecenie Nr</div>
-                                <div style='font-size: 55px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z['nr']}</div>
-                                <hr style='margin: 10px 0; border: 1px dashed #eee;'>
-                                <div style='font-size: 20px; font-weight: bold; margin-bottom: 25px; color: #333;'>{z['co']}</div>
+                                <div style='color: #64748b; font-size: 14px; text-transform: uppercase; font-weight: bold; letter-spacing: 1px;'>Zlecenie Nr</div>
+                                <div style='font-size: 55px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; color: #0f172a;'>{z['nr']}</div>
+                                <hr style='margin: 15px 0; border: none; border-top: 1px dashed #cbd5e1;'>
+                                <div style='font-size: 20px; font-weight: 600; margin-bottom: 25px; color: #334155;'>{z['co']}</div>
                             </div>
                             """, unsafe_allow_html=True)
                             
@@ -228,7 +242,6 @@ else:
                                 st.toast(f"Spakowano: {z['nr']}", icon="✔️")
                                 st.rerun()
 
-        # EKRAN HISTORII (MOŻLIWOŚĆ COFNIĘCIA)
         with tab_hist:
             hist = load_data(HIST_FILE)[:15] 
             if not hist:
@@ -238,7 +251,7 @@ else:
                     with st.expander(f"✔️ ZAM: {h['nr']}  |  {h.get('data_pakowania', '')}"):
                         col1, col2 = st.columns([3, 1])
                         col1.write(f"**Zawartość:** {h['co']}")
-                        if col2.button("Cofnij zlecenia", key=f"w_undo_{h['id']}", use_container_width=True):
+                        if col2.button("Cofnij zlecenie na ekran", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.toast(f"Cofnięto zamówienie {h['nr']}", icon="↩️")
                             st.rerun()
