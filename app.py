@@ -49,11 +49,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. BAZA DANYCH ---
+# --- 3. BAZA DANYCH I FOLDERY ---
 ZAM_FILE = "zamowienia.json"
 HIST_FILE = "historia.json"
 DYSPOZYCJE_FILE = "dyspozycje.json"
 HIST_DYSPOZYCJI_FILE = "historia_dyspozycji.json"
+LABELS_DIR = "etykiety" # Folder na pliki PDF
+
+# Tworzymy folder na etykiety, jeśli nie istnieje
+if not os.path.exists(LABELS_DIR):
+    os.makedirs(LABELS_DIR)
 
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
@@ -92,7 +97,7 @@ def restore_from_history(order_id):
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
 
-# Logika Dyspozycji (Zadań)
+# Logika Dyspozycji
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
     hist = load_data(HIST_DYSPOZYCJI_FILE)
@@ -171,23 +176,37 @@ else:
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     co = st.text_area("Specyfikacja (co spakować)", placeholder="Wprowadź listę produktów...")
                     
+                    # Nowe pole - wgrywanie PDF
+                    plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (opcjonalnie)", type=["pdf"])
+                    
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
                             if len(zam_data) > 0 and zam_data[-1]['nr'] == nr:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
+                                new_id = str(uuid.uuid4())
+                                has_label = False
+                                
+                                # Jeśli wgrano plik, zapisz go w folderze "etykiety" z nazwą ID zamówienia
+                                if plik_etykiety is not None:
+                                    sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
+                                    with open(sciezka_pdf, "wb") as f:
+                                        f.write(plik_etykiety.getbuffer())
+                                    has_label = True
+
                                 zam_data.append({
-                                    "id": str(uuid.uuid4()), 
+                                    "id": new_id, 
                                     "nr": nr, 
                                     "co": co, 
-                                    "termin": termin.strftime("%Y-%m-%d")
+                                    "termin": termin.strftime("%Y-%m-%d"),
+                                    "ma_etykiete": has_label
                                 })
                                 zam_data.sort(key=lambda x: x.get('termin', '9999-12-31'))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
                         else:
-                            st.toast("Wypełnij wszystkie pola formularza.", icon="❗️")
+                            st.toast("Wypełnij wymagane pola formularza.", icon="❗️")
 
         with t2:
             st.markdown("#### Zlecenia w trakcie realizacji przez pakownię")
@@ -197,10 +216,19 @@ else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        col_info.markdown(f"**Co spakować:**<br>{z['co']}", unsafe_allow_html=True)
+                        info_text = f"**Co spakować:**<br>{z['co']}"
+                        if z.get('ma_etykiete'):
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        col_info.markdown(info_text, unsafe_allow_html=True)
+                        
                         if col_action.button("Wycofaj zlecenie (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
+                            # Usuwanie z listy
                             zam_data = [x for x in zam_data if x['id'] != z['id']]
                             save_data(ZAM_FILE, zam_data)
+                            # Opcjonalne usunięcie pliku PDF by nie zagracać serwera
+                            pdf_path = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
+                            if os.path.exists(pdf_path):
+                                os.remove(pdf_path)
                             st.toast(f"Zlecenie {z['nr']} wycofane z produkcji.", icon="🗑️")
                             st.rerun()
 
@@ -227,12 +255,10 @@ else:
 
         with t4:
             col_d1, col_d2 = st.columns([1, 1])
-            
             with col_d1:
                 with st.form("form_dyspozycja", clear_on_submit=True):
                     st.markdown("#### Dodaj nowe zadanie poboczne")
-                    tresc_dysp = st.text_area("Treść zadania / Komunikat dla pracowników", placeholder="np. Posprzątaj stanowisko nr 2, brakuje taśmy...")
-                    
+                    tresc_dysp = st.text_area("Treść zadania / Komunikat", placeholder="np. Posprzątaj stanowisko nr 2...")
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
                             dyspo_data.insert(0, {
@@ -264,11 +290,10 @@ else:
     # ==========================================
     elif st.session_state.rola == 'pracownik':
         
-        # Pobieramy dane
         zam_pracownik = load_data(ZAM_FILE)
         dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
         
-        # --- LOGIKA WYKRYWANIA NOWYCH ZADAŃ (DŹWIĘK) ---
+        # Logika Audio Alertu
         if 'znane_zam' not in st.session_state:
             st.session_state.znane_zam = {z['id'] for z in zam_pracownik}
         if 'znane_dysp' not in st.session_state:
@@ -277,15 +302,12 @@ else:
         aktualne_zam_ids = {z['id'] for z in zam_pracownik}
         aktualne_dysp_ids = {d['id'] for d in dyspo_pracownik}
 
-        # Sprawdzamy czy pojawiło się nowe ID (Różnica zbiorów)
         nowe_zam = aktualne_zam_ids - st.session_state.znane_zam
         nowe_dysp = aktualne_dysp_ids - st.session_state.znane_dysp
 
-        # Aktualizujemy pamięć
         st.session_state.znane_zam = aktualne_zam_ids
         st.session_state.znane_dysp = aktualne_dysp_ids
 
-        # Jeśli wykryto nowość - zagraj dźwięk powiadomienia!
         if nowe_zam or nowe_dysp:
             st.markdown("""
             <audio autoplay>
@@ -294,7 +316,6 @@ else:
             """, unsafe_allow_html=True)
             st.toast("🔔 Nowe zadanie na terminalu!", icon="🔔")
 
-        # Nawigacja pracownika
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
         if c2.button("🔄 Odśwież", use_container_width=True): st.rerun()
@@ -302,7 +323,6 @@ else:
             st.session_state.rola = None
             st.rerun()
 
-        # Zakładki
         tab_kds, tab_dyspo, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "🕒 OSTATNIE OPERACJE"])
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -337,6 +357,21 @@ else:
                                 <div style='font-size: 20px; font-weight: 600; margin-bottom: 25px; color: #334155;'>{z['co']}</div>
                             </div>
                             """, unsafe_allow_html=True)
+                            
+                            # Jeśli jest etykieta, pokazujemy przycisk do drukowania
+                            if z.get('ma_etykiete'):
+                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
+                                if os.path.exists(sciezka_pdf):
+                                    with open(sciezka_pdf, "rb") as pdf_file:
+                                        # Bezpieczna nazwa pliku bez ukośników
+                                        safe_name = z['nr'].replace('/', '_').replace('\\', '_')
+                                        st.download_button(
+                                            label="🖨️ POBIERZ ETYKIETĘ",
+                                            data=pdf_file,
+                                            file_name=f"Etykieta_{safe_name}.pdf",
+                                            mime="application/pdf",
+                                            use_container_width=True
+                                        )
                             
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
