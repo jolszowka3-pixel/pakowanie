@@ -78,11 +78,13 @@ def load_data(sheet_name):
         return []
 
 def save_data(sheet_name, data):
+    # Jeśli lista jest pusta, tworzymy DataFrame z samymi nagłówkami
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
     
+    # Próba zapisu z obsługą błędów
     try:
         conn.update(worksheet=sheet_name, data=df)
     except Exception as e:
@@ -94,6 +96,7 @@ def move_to_history(order_id):
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Dodajemy nagłówek jeśli go nie ma
         hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
@@ -148,6 +151,7 @@ else:
     # ==========================================
     if st.session_state.rola == 'szef':
         
+        # --- ZMIANA 1: NAPRAWA WYLOGOWANIA SZEFA ---
         c1, c2, c3 = st.columns([6, 2, 2])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -196,13 +200,13 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                has_label = False
+                                has_label = "False"
                                 
                                 if plik_etykiety is not None:
                                     sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
                                     with open(sciezka_pdf, "wb") as f:
                                         f.write(plik_etykiety.getbuffer())
-                                    has_label = True
+                                    has_label = "True"
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
@@ -225,12 +229,19 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if str(z.get('ma_etykiete')).lower() == 'true': info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        
+                        # ZMIANA 2: Sprawdzamy fizycznie czy plik na serwerze istnieje
+                        sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
+                        if os.path.exists(sciezka_pdf):
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Wgrano etykietę PDF</span>"
+                        
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
+                            if os.path.exists(sciezka_pdf):
+                                os.remove(sciezka_pdf)
                             st.rerun()
 
         with t3:
@@ -366,77 +377,17 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- PRZYCISK DRUKOWANIA HTML/JS ---
-                            if str(z.get('ma_etykiete')).lower() == 'true':
-                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
-                                if os.path.exists(sciezka_pdf):
-                                    with open(sciezka_pdf, "rb") as file:
-                                        pdf_b64 = base64.b64encode(file.read()).decode('utf-8')
-                                    
-                                    html_code = f"""
-                                    <!DOCTYPE html>
-                                    <html>
-                                    <head>
-                                    <style>
-                                        body {{ margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }}
-                                        .btn {{
-                                            width: 100%;
-                                            padding: 0.5rem 1rem;
-                                            background-color: #f8fafc;
-                                            color: #1e3a8a;
-                                            border: 2px solid #1e3a8a;
-                                            border-radius: 8px;
-                                            font-size: 16px;
-                                            font-weight: bold;
-                                            cursor: pointer;
-                                            box-sizing: border-box;
-                                            height: 45px;
-                                            display: flex;
-                                            align-items: center;
-                                            justify-content: center;
-                                            transition: all 0.2s;
-                                        }}
-                                        .btn:hover {{
-                                            background-color: #1e3a8a;
-                                            color: #ffffff;
-                                        }}
-                                    </style>
-                                    </head>
-                                    <body>
-                                        <button class="btn" onclick="printPDF()">🖨️ DRUKUJ ETYKIETĘ</button>
-                                        <script>
-                                        function printPDF() {{
-                                            const b64 = "{pdf_b64}";
-                                            const byteCharacters = atob(b64);
-                                            const byteNumbers = new Array(byteCharacters.length);
-                                            for (let i = 0; i < byteCharacters.length; i++) {{
-                                                byteNumbers[i] = byteCharacters.charCodeAt(i);
-                                            }}
-                                            const byteArray = new Uint8Array(byteNumbers);
-                                            const blob = new Blob([byteArray], {{type: 'application/pdf'}});
-                                            const blobUrl = URL.createObjectURL(blob);
-                                            
-                                            const printFrame = document.createElement('iframe');
-                                            printFrame.style.display = 'none';
-                                            printFrame.src = blobUrl;
-                                            document.body.appendChild(printFrame);
-                                            
-                                            printFrame.onload = function() {{
-                                                setTimeout(function() {{
-                                                    try {{
-                                                        printFrame.contentWindow.focus();
-                                                        printFrame.contentWindow.print();
-                                                    }} catch (e) {{
-                                                        window.open(blobUrl, '_blank');
-                                                    }}
-                                                }}, 200);
-                                            }};
-                                        }}
-                                        </script>
-                                    </body>
-                                    </html>
-                                    """
-                                    components.html(html_code, height=55)
+                            # --- ZMIANA 2: NIEZAWODNE WYŚWIETLANIE ETYKIET ---
+                            sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
+                            if os.path.exists(sciezka_pdf):
+                                with open(sciezka_pdf, "rb") as file:
+                                    st.download_button(
+                                        label="🖨️ OTWÓRZ ETYKIETĘ",
+                                        data=file,
+                                        file_name=f"Etykieta_{z.get('nr')}.pdf",
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
