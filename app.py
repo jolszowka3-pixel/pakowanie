@@ -62,7 +62,7 @@ def get_drive_service():
 try:
     DRIVE_SERVICE = get_drive_service()
 except Exception as e:
-    st.error(f"Nie udało się połączyć z Google Drive. Sprawdź sekrety: {e}")
+    st.error(f"Nie udało się połączyć z Google Drive: {e}")
 
 FOLDER_ID = st.secrets.get("drive_folder_id", "")
 
@@ -74,7 +74,7 @@ ZWROTY_FILE = "Zwroty"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# Definicja nagłówków - zaktualizowana o pdf_drive_id
+# Definicja nagłówków
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "pdf_drive_id"],
     "Historia": ["id", "nr", "co", "termin", "pdf_drive_id", "data_pakowania"],
@@ -86,14 +86,13 @@ def load_data(sheet_name):
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
+        df = df.fillna("") # <--- KLUCZOWA POPRAWKA (Usuwa błąd 'nan')
         return df.to_dict(orient="records")
     except Exception:
         return []
 
 def save_data(sheet_name, data):
     if not data:
-        # Tworzymy pusty DataFrame z odpowiednimi nagłówkami, 
-        # aby uniknąć błędu IncorrectCellLabel przy zapisie pustej listy
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
@@ -105,7 +104,7 @@ def save_data(sheet_name, data):
 
 def upload_pdf_to_drive(file_content, filename):
     if not FOLDER_ID: 
-        st.error("Brak skonfigurowanego folderu Google Drive (drive_folder_id)")
+        st.error("Brak skonfigurowanego folderu Google Drive (drive_folder_id w Secrets)")
         return ""
     try:
         file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
@@ -260,8 +259,12 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if z.get('pdf_drive_id'): 
+                        
+                        # Sprawdzanie czy PDF jest wgrany
+                        check_id = str(z.get('pdf_drive_id', '')).strip()
+                        if check_id and check_id.lower() != 'nan' and len(check_id) > 10: 
                             info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                            
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -402,9 +405,9 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Pobieranie PDF
-                            drive_id = z.get('pdf_drive_id', "")
-                            if drive_id:
+                            # --- POPRAWIONE POBIERANIE Z DRIVE ---
+                            drive_id = str(z.get('pdf_drive_id', "")).strip()
+                            if drive_id and drive_id.lower() != 'nan' and len(drive_id) > 10:
                                 pdf_bytes = download_pdf_from_drive(drive_id)
                                 if pdf_bytes:
                                     st.download_button(
