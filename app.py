@@ -47,16 +47,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 3. GOOGLE SHEETS BAZA DANYCH ---
-# Połączenie z Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Nazwy kart w Google Sheets (Worksheets)
 ZAM_FILE = "Zamowienia"
 HIST_FILE = "Historia"
 DYSPOZYCJE_FILE = "Dyspozycje"
 ZWROTY_FILE = "Zwroty"
 
-# Katalog na pliki PDF (nadal lokalnie)
 LABELS_DIR = "etykiety" 
 if not os.path.exists(LABELS_DIR):
     os.makedirs(LABELS_DIR)
@@ -66,15 +63,13 @@ HASLO_PRACOWNIKA = "paka123"
 
 def load_data(sheet_name):
     try:
-        # ttl=0 wymusza pobranie najświeższych danych
         df = conn.read(worksheet=sheet_name, ttl=0)
-        df = df.dropna(how='all') # Usunięcie pustych wierszy z Excela
+        df = df.dropna(how='all') 
         return df.to_dict(orient="records")
     except Exception as e:
         return []
 
 def save_data(sheet_name, data):
-    # Zamiana listy na format czytelny dla Excela i aktualizacja arkusza
     df = pd.DataFrame(data)
     conn.update(worksheet=sheet_name, data=df)
 
@@ -103,7 +98,6 @@ def restore_from_history(order_id):
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
-    # Dla uproszczenia dyspozycje usuwamy bez osobnej historii w arkuszu
     dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
     save_data(DYSPOZYCJE_FILE, dyspo)
 
@@ -214,7 +208,7 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if z.get('ma_etykiete'): info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        if str(z.get('ma_etykiete')).lower() == 'true': info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -355,18 +349,20 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            if z.get('ma_etykiete') in [True, "True", "TRUE", "true"]:
+                            # PANCERNY PRZYCISK POBIERANIA PDF
+                            if str(z.get('ma_etykiete')).lower() == 'true':
                                 sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
                                 if os.path.exists(sciezka_pdf):
-                                    with open(sciezka_pdf, "rb") as pdf_file:
-                                        base64_pdf = base64.b64encode(pdf_file.read()).decode('utf-8')
-                                    st.markdown(f'''
-                                    <div style="margin-bottom: 20px;">
-                                        <div style="color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px;">📄 PODGLĄD ETYKIETY</div>
-                                        <iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="300px" style="border: 2px solid #e2e8f0; border-radius: 8px;"></iframe>
-                                    </div>
-                                    ''', unsafe_allow_html=True)
+                                    with open(sciezka_pdf, "rb") as file:
+                                        btn = st.download_button(
+                                            label="🖨️ OTWÓRZ ETYKIETĘ",
+                                            data=file,
+                                            file_name=f"Etykieta_{z.get('nr')}.pdf",
+                                            mime="application/pdf",
+                                            use_container_width=True
+                                        )
                             
+                            st.write("") # Odstęp
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
                                 st.rerun()
