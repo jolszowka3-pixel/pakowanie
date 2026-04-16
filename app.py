@@ -53,7 +53,7 @@ ZAM_FILE = "Zamowienia"
 HIST_FILE = "Historia"
 DYSPOZYCJE_FILE = "Dyspozycje"
 ZWROTY_FILE = "Zwroty"
-ETYKIETY_FILE = "Etykiety" # Nowa zakładka na kawałki PDF
+ETYKIETY_FILE = "Etykiety"
 
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
@@ -64,7 +64,7 @@ SHEET_HEADERS = {
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
     "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"],
-    "Etykiety": ["zam_id", "czesc", "dane"] 
+    "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
 def load_data(sheet_name):
@@ -102,7 +102,7 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
-        usun_etykiete(order_id) # Czyści etykietę po spakowaniu
+        usun_etykiete(order_id) # Zwalniamy miejsce po spakowaniu
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -166,6 +166,8 @@ else:
         hist_data = load_data(HIST_FILE)
         dyspo_data = load_data(DYSPOZYCJE_FILE)
         zwroty_data = load_data(ZWROTY_FILE)
+        etykiety_baza = load_data(ETYKIETY_FILE) # Ładujemy raz, żeby było szybko
+        
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
@@ -202,27 +204,24 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                has_label = "False"
                                 
-                                # CIĘCIE PLIKU DO ARKUSZA
+                                # CIĘCIE I WGRYWANIE DO ARKUSZA "Etykiety"
                                 if plik_etykiety is not None:
                                     pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
-                                    etykiety_db = load_data(ETYKIETY_FILE)
                                     chunk_size = 45000 
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
-                                        etykiety_db.append({
+                                        etykiety_baza.append({
                                             "zam_id": new_id,
                                             "czesc": idx,
                                             "dane": chunk
                                         })
-                                    save_data(ETYKIETY_FILE, etykiety_db)
-                                    has_label = "True"
+                                    save_data(ETYKIETY_FILE, etykiety_baza)
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": has_label
+                                    "ma_etykiete": "True" # To pole jest już tylko informacyjne
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
@@ -240,8 +239,11 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if str(z.get('ma_etykiete')).lower() == 'true': 
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę (w chmurze)</span>"
+                        
+                        # ZMIANA: Sprawdzamy czy fizycznie w arkuszu Etykiety są dane dla tego ID
+                        czy_ma_plik = any(str(e.get('zam_id')) == str(z['id']) for e in etykiety_baza)
+                        if czy_ma_plik: 
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -366,7 +368,7 @@ else:
             else:
                 cols = st.columns(3)
                 
-                # Ładujemy bazę etykiet na zewnątrz pętli
+                # Ładujemy bazę etykiet JEDEN RAZ na górze dla optymalizacji
                 etykiety_pracownik = load_data(ETYKIETY_FILE)
                 
                 for i, z in enumerate(zam_pracownik):
@@ -387,23 +389,77 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Otwieranie sklejonej etykiety
-                            if str(z.get('ma_etykiete')).lower() == 'true':
-                                kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
-                                if kawalki:
-                                    kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
-                                    pelny_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
-                                    try:
-                                        pdf_bytes = base64.b64decode(pelny_b64)
-                                        st.download_button(
-                                            label="🖨️ OTWÓRZ ETYKIETĘ",
-                                            data=pdf_bytes,
-                                            file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                            mime="application/pdf",
-                                            use_container_width=True
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Błąd pliku PDF")
+                            # --- ZMIANA: Szukamy kawałków po zam_id (omijamy sprawdzanie ma_etykiete) ---
+                            kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
+                            
+                            if kawalki:
+                                kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
+                                
+                                html_code = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                <style>
+                                    body {{ margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }}
+                                    .btn {{
+                                        width: 100%;
+                                        padding: 0.5rem 1rem;
+                                        background-color: #f8fafc;
+                                        color: #1e3a8a;
+                                        border: 2px solid #1e3a8a;
+                                        border-radius: 8px;
+                                        font-size: 16px;
+                                        font-weight: bold;
+                                        cursor: pointer;
+                                        box-sizing: border-box;
+                                        height: 45px;
+                                        display: flex;
+                                        align-items: center;
+                                        justify-content: center;
+                                        transition: all 0.2s;
+                                    }}
+                                    .btn:hover {{
+                                        background-color: #1e3a8a;
+                                        color: #ffffff;
+                                    }}
+                                </style>
+                                </head>
+                                <body>
+                                    <button class="btn" onclick="printPDF()">🖨️ DRUKUJ ETYKIETĘ</button>
+                                    <script>
+                                    function printPDF() {{
+                                        const b64 = "{pdf_b64}";
+                                        const byteCharacters = atob(b64);
+                                        const byteNumbers = new Array(byteCharacters.length);
+                                        for (let i = 0; i < byteCharacters.length; i++) {{
+                                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                        }}
+                                        const byteArray = new Uint8Array(byteNumbers);
+                                        const blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        
+                                        const printFrame = document.createElement('iframe');
+                                        printFrame.style.display = 'none';
+                                        printFrame.src = blobUrl;
+                                        document.body.appendChild(printFrame);
+                                        
+                                        printFrame.onload = function() {{
+                                            setTimeout(function() {{
+                                                try {{
+                                                    printFrame.contentWindow.focus();
+                                                    printFrame.contentWindow.print();
+                                                }} catch (e) {{
+                                                    window.open(blobUrl, '_blank');
+                                                }}
+                                            }}, 250);
+                                        }};
+                                    }}
+                                    </script>
+                                </body>
+                                </html>
+                                """
+                                components.html(html_code, height=55)
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
