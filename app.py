@@ -66,11 +66,9 @@ SHEET_HEADERS = {
     "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
-# --- OPTYMALIZACJA: CACHE DANYCH ---
-@st.cache_data(ttl=10) # Zapamiętuje dane na 10 sekund, eliminując zbędne zapytania HTTP
+@st.cache_data(ttl=10)
 def load_data(sheet_name):
     try:
-        # TTL w conn.read ustawiamy na małą wartość, by cache_data kontrolował odświeżanie
         df = conn.read(worksheet=sheet_name, ttl=5)
         df = df.dropna(how='all') 
         df = df.fillna("") 
@@ -85,7 +83,7 @@ def save_data(sheet_name, data):
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
-        st.cache_data.clear() # Czyścimy cache po zapisie, by od razu widzieć zmiany
+        st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
@@ -150,24 +148,29 @@ if st.session_state.rola is None:
                         st.toast("Nieprawidłowe hasło!", icon="❌")
 
 else:
-    # --- WCZESNE ŁADOWANIE DANYCH (RAZ NA CYKL) ---
-    # Dzięki temu nie ładujemy tych samych danych w każdej zakładce osobno
+    # Ładowanie danych
     zam_data = load_data(ZAM_FILE)
     hist_data = load_data(HIST_FILE)
     dyspo_data = load_data(DYSPOZYCJE_FILE)
     zwroty_data = load_data(ZWROTY_FILE)
 
+    # --- PANEL ADMINISTRATORA ---
     if st.session_state.rola == 'szef':
-        c1, c2, c3 = st.columns([6, 2, 2])
+        # Nagłówek Panelu Szefa z przyciskiem odświeżania
+        c1, c2, c3, c4 = st.columns([5, 2, 1.5, 1.5])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
-        if c3.button("Wyloguj się", use_container_width=True):
+        
+        if c3.button("🔄 Odśwież", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+            
+        if c4.button("Wyloguj się", use_container_width=True):
             st.session_state.rola = None
             st.rerun()
         st.divider()
 
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
-        
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
         
         do_spakowania_dzisiaj = sum(1 for z in zam_data if str(z.get('termin', '9999-12-31')) <= dzisiaj_str)
@@ -195,7 +198,6 @@ else:
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     co = st.text_area("Specyfikacja (co spakować)")
                     plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
-                    
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
                             if len(zam_data) > 0 and str(zam_data[-1].get('nr')) == str(nr):
@@ -205,35 +207,27 @@ else:
                                 if plik_etykiety is not None:
                                     pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
                                     chunk_size = 45000 
-                                    etyk_nowe = load_data(ETYKIETY_FILE) # Ładujemy etykiety tylko przy zapisie
+                                    etyk_baza = load_data(ETYKIETY_FILE)
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
-                                        etyk_nowe.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
-                                    save_data(ETYKIETY_FILE, etyk_nowe)
-
-                                zam_data.append({
-                                    "id": new_id, "nr": nr, "co": co, 
-                                    "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": "True" if plik_etykiety else "False"
-                                })
+                                        etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
+                                    save_data(ETYKIETY_FILE, etyk_baza)
+                                zam_data.append({"id": new_id, "nr": nr, "co": co, "termin": termin.strftime("%Y-%m-%d"), "ma_etykiete": "True" if plik_etykiety else "False"})
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
-                        else:
-                            st.toast("Wypełnij wymagane pola formularza.", icon="❗️")
+                        else: st.toast("Wypełnij wymagane pola formularza.", icon="❗️")
 
         with t2:
             st.markdown("#### Zlecenia w trakcie realizacji przez pakownię")
-            if not zam_data:
-                st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń.")
+            if not zam_data: st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń.")
             else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if str(z.get('ma_etykiete')) == "True":
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
+                        if str(z.get('ma_etykiete')) == "True": info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             nowe_zam = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
@@ -243,8 +237,7 @@ else:
 
         with t3:
             st.markdown("#### Dziennik operacji (Zamówienia)")
-            if not hist_data:
-                st.info("Brak wpisów w dzienniku.")
+            if not hist_data: st.info("Brak wpisów w dzienniku.")
             else:
                 for h in hist_data:
                     with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
@@ -253,7 +246,6 @@ else:
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
-                
                 st.markdown("<br>", unsafe_allow_html=True)
                 with st.expander("⚙️ Zaawansowana administracja rekordami"):
                     edited_hist = st.data_editor(hist_data, num_rows="dynamic", use_container_width=True)
@@ -269,10 +261,7 @@ else:
                     tresc_dysp = st.text_area("Treść zadania")
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
-                            dyspo_data.insert(0, {
-                                "id": str(uuid.uuid4()), "tresc": tresc_dysp,
-                                "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")
-                            })
+                            dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc_dysp, "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")})
                             save_data(DYSPOZYCJE_FILE, dyspo_data)
                             st.rerun()
             with col_d2:
@@ -283,15 +272,13 @@ else:
                         with st.container(border=True):
                             st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
                             if st.button("Usuń", key=f"del_dysp_{d['id']}"):
-                                nowa_dysp = [x for x in dyspo_data if str(x.get('id')) != str(d['id'])]
-                                save_data(DYSPOZYCJE_FILE, nowa_dysp)
+                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])])
                                 st.rerun()
                                 
         with t5:
             st.markdown("#### Obsługa Zwrotów i Reklamacji (RMA)")
             nowe_zwroty = [z for z in zwroty_data if str(z.get('status')) == 'Nowy']
             stare_zwroty = [z for z in zwroty_data if str(z.get('status')) == 'Rozpatrzony']
-            
             st.markdown("##### 🔴 Oczekujące na Twoją decyzję")
             if not nowe_zwroty: st.success("Wszystkie zwroty zostały rozpatrzone.")
             else:
@@ -313,20 +300,17 @@ else:
             with st.expander("📁 Archiwum rozwiązanych zwrotów"):
                 for z in stare_zwroty: st.markdown(f"**{z.get('nr')}** - Stan: {z.get('stan')}")
 
+    # --- TERMINAL PRACOWNIKA ---
     elif st.session_state.rola == 'pracownik':
         # Audio Alert Logic
         if 'znane_zam' not in st.session_state: st.session_state.znane_zam = {str(z.get('id')) for z in zam_data}
         if 'znane_dysp' not in st.session_state: st.session_state.znane_dysp = {str(d.get('id')) for d in dyspo_data}
-
         akt_zam_ids = {str(z.get('id')) for z in zam_data}
         akt_dysp_ids = {str(d.get('id')) for d in dyspo_data}
-
         if (akt_zam_ids - st.session_state.znane_zam) or (akt_dysp_ids - st.session_state.znane_dysp):
             st.markdown("""<audio autoplay><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>""", unsafe_allow_html=True)
             st.toast("🔔 Nowe zadanie na terminalu!", icon="🔔")
-
-        st.session_state.znane_zam = akt_zam_ids
-        st.session_state.znane_dysp = akt_dysp_ids
+        st.session_state.znane_zam, st.session_state.znane_dysp = akt_zam_ids, akt_dysp_ids
 
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
@@ -341,33 +325,24 @@ else:
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         with tab_kds:
-            if not zam_data:
-                st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
+            if not zam_data: st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
                 cols = st.columns(3)
-                # Ładujemy bazę etykiet tylko jeśli są jakiekolwiek zlecenia (dla oszczędności czasu)
                 etyk_wszystkie = load_data(ETYKIETY_FILE)
-                
                 for i, z in enumerate(zam_data):
                     with cols[i % 3]:
                         with st.container(border=True):
-                            termin_zlecenia = str(z.get('termin', '9999-12-31'))
-                            if termin_zlecenia < dzisiaj_str: badge_html = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {termin_zlecenia}</div>"
-                            elif termin_zlecenia == dzisiaj_str: badge_html = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
-                            else: badge_html = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {termin_zlecenia}</div>"
-
-                            st.markdown(f"<div style='text-align:center;'>{badge_html}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
-                            
+                            t_zlec = str(z.get('termin', '9999-12-31'))
+                            if t_zlec < dzisiaj_str: badge = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {t_zlec}</div>"
+                            elif t_zlec == dzisiaj_str: badge = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
+                            else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
+                            st.markdown(f"<div style='text-align:center;'>{badge}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
                             kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                             if kawalki:
                                 kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
                                 pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
-                                html_code = f"""
-                                <html><head><style>.btn {{ width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }} .btn:hover {{ background: #1e3a8a; color: #fff; }}</style></head>
-                                <body><button class="btn" onclick="printPDF()">🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = "{pdf_b64}"; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>
-                                """
+                                html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                 components.html(html_code, height=55)
-                            
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
