@@ -160,10 +160,10 @@ else:
         m4.metric(label="Aktywne Dyspozycje", value=len(dyspo_data))
         st.divider()
         
-        # Zakładki Szefa z dodaną Dyspozycją
-        t1, t2, t3 = st.tabs(["➕ Nowe Zlecenie", "🗄️ Baza Historyczna", "📝 Dyspozycje i Zadania"])
+        # --- ZAKŁADKI SZEFA (teraz 4 zakładki) ---
+        t1, t2, t3, t4 = st.tabs(["➕ Nowe Zlecenie", "📦 Aktywne na Produkcji", "🗄️ Baza Historyczna", "📝 Dyspozycje i Zadania"])
 
-        # --- ZAKŁADKA 1: ZAMÓWIENIA ---
+        # --- ZAKŁADKA 1: DODAWANIE ZAMÓWIEŃ ---
         with t1:
             col_form, col_pusty = st.columns([2, 1])
             with col_form:
@@ -191,14 +191,30 @@ else:
                         else:
                             st.toast("Wypełnij wszystkie pola formularza.", icon="❗️")
 
-        # --- ZAKŁADKA 2: HISTORIA ---
+        # --- ZAKŁADKA 2: AKTYWNE NA PRODUKCJI (NOWA) ---
         with t2:
+            st.markdown("#### Zlecenia w trakcie realizacji przez pakownię")
+            if not zam_data:
+                st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń na ekranie.")
+            else:
+                for z in zam_data:
+                    with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
+                        col_info, col_action = st.columns([4, 1])
+                        col_info.markdown(f"**Co spakować:**<br>{z['co']}", unsafe_allow_html=True)
+                        if col_action.button("Wycofaj zlecenie (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
+                            zam_data = [x for x in zam_data if x['id'] != z['id']]
+                            save_data(ZAM_FILE, zam_data)
+                            st.toast(f"Zlecenie {z['nr']} wycofane z produkcji.", icon="🗑️")
+                            st.rerun()
+
+        # --- ZAKŁADKA 3: HISTORIA ---
+        with t3:
             st.markdown("#### Dziennik operacji (Zamówienia)")
             if not hist_data:
                 st.info("Brak wpisów w dzienniku.")
             else:
                 for h in hist_data:
-                    with st.expander(f"ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
+                    with st.expander(f"✔️ ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         col_info.markdown(f"**Szczegóły:**<br>{h['co']}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
@@ -213,8 +229,8 @@ else:
                         save_data(HIST_FILE, edited_hist)
                         st.toast("Zaktualizowano.", icon="💾")
 
-        # --- ZAKŁADKA 3: DYSPOZYCJE ---
-        with t3:
+        # --- ZAKŁADKA 4: DYSPOZYCJE ---
+        with t4:
             col_d1, col_d2 = st.columns([1, 1])
             
             with col_d1:
@@ -242,7 +258,7 @@ else:
                 else:
                     for d in dyspo_data:
                         with st.container(border=True):
-                            st.markdown(f"**Nodano:** {d['data_dodania']}<br>{d['tresc']}", unsafe_allow_html=True)
+                            st.markdown(f"**Wysłano:** {d['data_dodania']}<br>{d['tresc']}", unsafe_allow_html=True)
                             if st.button("Usuń (Anuluj)", key=f"del_dysp_{d['id']}"):
                                 dyspo_data = [x for x in dyspo_data if x['id'] != d['id']]
                                 save_data(DYSPOZYCJE_FILE, dyspo_data)
@@ -260,7 +276,7 @@ else:
             st.session_state.rola = None
             st.rerun()
 
-        # Zakładki u pracownika - dodana Tablica Zadań
+        # Zakładki u pracownika
         tab_kds, tab_dyspo, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "🕒 OSTATNIE OPERACJE"])
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -317,7 +333,6 @@ else:
                 for i, d in enumerate(dyspo):
                     with d_cols[i % 3]:
                         with st.container(border=True):
-                            # Inny wygląd wizualny dla dyspozycji (kolory ostrzegawcze/informacyjne)
                             st.markdown(f"""
                             <div style='background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 15px;'>
                                 <div style='color: #b45309; font-size: 12px; font-weight: bold; margin-bottom: 5px;'>📌 DYSPOZYCJA Z: {d.get('data_dodania', '')}</div>
@@ -325,7 +340,6 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Przycisk ze specjalnym kluczem
                             if st.button("POTWIERDŹ WYKONANIE", key=f"dysp_{d['id']}", use_container_width=True):
                                 move_dyspozycja_to_history(d['id'])
                                 st.toast("Zadanie odhaczone!", icon="👍")
