@@ -333,41 +333,30 @@ else:
     # ==========================================
     elif st.session_state.rola == 'pracownik':
         
-        # --- MECHANIZM "WYDRUK WIDMO" ---
-        # Ten fragment odpala się tuż po kliknięciu "Zakończ i Drukuj" na dole kodu
+        # --- NIEZAWODNY MECHANIZM "WYDRUK WIDMO" (PRINT.JS) ---
         if st.session_state.print_b64:
             js_print = f"""
-            <script>
-                const b64 = "{st.session_state.print_b64}";
-                const byteCharacters = atob(b64);
-                const byteNumbers = new Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {{
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                }}
-                const byteArray = new Uint8Array(byteNumbers);
-                const blob = new Blob([byteArray], {{type: 'application/pdf'}});
-                const blobUrl = URL.createObjectURL(blob);
-                
-                const printFrame = document.createElement('iframe');
-                printFrame.style.display = 'none';
-                printFrame.src = blobUrl;
-                document.body.appendChild(printFrame);
-                
-                printFrame.onload = function() {{
-                    setTimeout(function() {{
-                        try {{
-                            printFrame.contentWindow.focus();
-                            printFrame.contentWindow.print();
-                        }} catch (e) {{
-                            window.open(blobUrl, '_blank');
+            <html>
+            <head>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/print-js/1.6.0/print.js"></script>
+            </head>
+            <body>
+                <script>
+                    function tryPrint() {{
+                        if (typeof printJS !== 'undefined') {{
+                            printJS({{printable: '{st.session_state.print_b64}', type: 'pdf', base64: true}});
+                        }} else {{
+                            setTimeout(tryPrint, 100);
                         }}
-                    }}, 250);
-                }};
-            </script>
+                    }}
+                    tryPrint();
+                </script>
+            </body>
+            </html>
             """
-            components.html(js_print, height=0)
-            st.session_state.print_b64 = None # Czyścimy pamięć, by nie drukowało w kółko
-        # --------------------------------
+            components.html(js_print, height=1)
+            st.session_state.print_b64 = None 
+        # -----------------------------------------------------
         
         zam_pracownik = load_data(ZAM_FILE)
         dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
@@ -424,13 +413,11 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- ZMIANA: PRZYCISK ZMIENIA SIĘ W ZALEŻNOŚCI OD ETYKIETY ---
-                            ma_etykiete = str(z.get('ma_etykiete', '')).lower() == 'true'
+                            ma_etykiete = str(z.get('ma_etykiete', '')).lower() in ['true', '1']
                             btn_label = "🖨️ ZAKOŃCZ I DRUKUJ" if ma_etykiete else "✔️ ZAKOŃCZ ZLECENIE"
                             
                             if st.button(btn_label, key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 
-                                # Jeśli ma etykietę, sklejamy ją i zapisujemy do pamięci na potrzeby wydruku po odświeżeniu
                                 if ma_etykiete:
                                     kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
                                     if kawalki:
@@ -438,7 +425,6 @@ else:
                                         pelny_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
                                         st.session_state.print_b64 = pelny_b64
                                 
-                                # Zakończenie zlecenia i odświeżenie strony (co aktywuje kod drukujący na samej górze)
                                 move_to_history(z['id'])
                                 st.rerun()
 
