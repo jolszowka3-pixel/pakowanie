@@ -69,7 +69,6 @@ SHEET_HEADERS = {
 # ZOPTYMALIZOWANE POBIERANIE (Cache 10 minut = Ochrona limitu)
 def load_data(sheet_name):
     try:
-        # ttl="10m" oznacza, że przez 10 minut aplikacja nie zapytania Google API, jeśli cache nie zostanie wyczyszczony
         df = conn.read(worksheet=sheet_name, ttl="10m")
         df = df.dropna(how='all') 
         df = df.fillna("") 
@@ -84,7 +83,6 @@ def save_data(sheet_name, data):
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
-        # BARDZO WAŻNE: Po każdym zapisie czyścimy pamięć podręczną, aby wymusić odświeżenie danych
         st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
@@ -106,7 +104,6 @@ def move_to_history(order_id):
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
         
-        # Optymalizacja: Pytamy zakładkę Etykiety TYLKO jeśli zlecenie miało etykietę
         ma_etykiete = str(order.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
         if ma_etykiete:
             usun_etykiete(order_id)
@@ -166,11 +163,10 @@ else:
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
         if c3.button("Wyloguj się", use_container_width=True):
             st.session_state.rola = None
-            st.cache_data.clear() # Czyścimy cache przy wylogowaniu
+            st.cache_data.clear() 
             st.rerun()
         st.divider()
 
-        # Zoptymalizowano: Etykiety pobieramy tylko tam, gdzie są potrzebne
         zam_data = load_data(ZAM_FILE)
         hist_data = load_data(HIST_FILE)
         dyspo_data = load_data(DYSPOZYCJE_FILE)
@@ -217,7 +213,7 @@ else:
                                 if plik_etykiety is not None:
                                     pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
                                     chunk_size = 45000 
-                                    etykiety_baza = load_data(ETYKIETY_FILE) # Pobierane tylko przy dodawaniu
+                                    etykiety_baza = load_data(ETYKIETY_FILE) 
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etykiety_baza.append({
@@ -245,15 +241,15 @@ else:
             if not zam_data:
                 st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń.")
             else:
+                etykiety_baza = load_data(ETYKIETY_FILE) # Sprawdzamy czy fizycznie są
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
                         
-                        # Odporność na polskiego Excela (PRAWDA) i brak potrzeby obciążania sieci
                         ma_etykiete = str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
                         if ma_etykiete: 
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta dołączona</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -365,7 +361,7 @@ else:
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
         if c2.button("🔄 Odśwież", use_container_width=True): 
-            st.cache_data.clear() # Przycisk odśwież czyści pamięć podręczną i wymusza pobranie z bazy
+            st.cache_data.clear() 
             st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
@@ -381,7 +377,6 @@ else:
             else:
                 cols = st.columns(3)
                 
-                # Oszczędność API: Ładujemy ciężką bazę etykiet TYLKO, jeśli są obecnie etykiety do spakowania
                 czy_sa_etykiety = any(str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes'] for z in zam_pracownik)
                 if czy_sa_etykiety:
                     etykiety_pracownik = load_data(ETYKIETY_FILE)
@@ -406,37 +401,29 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- NIEZAWODNY DRUK + ZAKOŃCZENIE W TLE ---
                             ma_etykiete = str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
                             
+                            # --- NOWE PODEJŚCIE: WBUDOWANY PODGLĄD PDF ---
                             if ma_etykiete:
                                 kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
                                 if kawalki:
                                     kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
                                     pelny_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
-                                    try:
-                                        pdf_bytes = base64.b64decode(pelny_b64)
-                                        # Przycisk pobierania natywny. on_click sprawia, że zlecenie znika w tle.
-                                        st.download_button(
-                                            label="🖨️ POBIERZ ETYKIETĘ I ZAKOŃCZ",
-                                            data=pdf_bytes,
-                                            file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                            mime="application/pdf",
-                                            use_container_width=True,
-                                            on_click=move_to_history,
-                                            args=(z['id'],)
-                                        )
-                                    except Exception:
-                                        st.error("Błąd pliku PDF")
-                            else:
-                                st.button(
-                                    "✔️ ZAKOŃCZ ZLECENIE", 
-                                    key=f"kds_{z['id']}", 
-                                    use_container_width=True, 
-                                    type="primary",
-                                    on_click=move_to_history,
-                                    args=(z['id'],)
-                                )
+                                    
+                                    # Wyświetlanie PDFa bezpośrednio na ekranie
+                                    pdf_display = f'<iframe src="data:application/pdf;base64,{pelny_b64}" width="100%" height="300" type="application/pdf" style="border:1px solid #cbd5e1; border-radius:8px; margin-bottom:15px;"></iframe>'
+                                    st.markdown(pdf_display, unsafe_allow_html=True)
+                                    st.caption("👆 Użyj ikony drukarki na podglądzie powyżej, aby wydrukować etykietę.")
+                                    
+                            # Pod spodem standardowy przycisk zakańczania
+                            st.button(
+                                "✔️ ZAKOŃCZ ZLECENIE", 
+                                key=f"kds_{z['id']}", 
+                                use_container_width=True, 
+                                type="primary",
+                                on_click=move_to_history,
+                                args=(z['id'],)
+                            )
 
         with tab_dyspo:
             if not dyspo_pracownik:
