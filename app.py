@@ -57,7 +57,7 @@ ZWROTY_FILE = "Zwroty"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# Nagłówki (Dodaliśmy kolumnę pdf_base64 dla Zamówień i Historii)
+# Nagłówki arkuszy
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "pdf_base64"],
     "Historia": ["id", "nr", "co", "termin", "pdf_base64", "data_pakowania"],
@@ -184,10 +184,9 @@ else:
                         if nr and co:
                             pdf_string = ""
                             if plik_etykiety is not None:
-                                # Konwersja pliku PDF na tekst Base64
                                 pdf_string = base64.b64encode(plik_etykiety.read()).decode('utf-8')
                                 if len(pdf_string) > 48000:
-                                    st.error("Plik PDF jest za duży dla Arkusza Google. Spróbuj mniejszego pliku.")
+                                    st.error("Plik PDF jest za duży dla Arkusza Google (limit 50k znaków).")
                                     st.stop()
 
                             zam_data.append({
@@ -319,6 +318,41 @@ else:
 
                             st.markdown(f"""<div style='text-align:center;'>{badge_html}<div style='color: #64748b; font-size: 14px;'>Zlecenie Nr</div><div style='font-size: 45px; font-weight: 900;'>{z.get('nr')}</div><hr><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>""", unsafe_allow_html=True)
                             
-                            # PANCERNY PRZYCISK POBIERANIA Z CHMURY (BASE64)
                             pdf_data = z.get('pdf_base64', "")
-                            if pdf_data and len(str(pdf_data
+                            if pdf_data and len(str(pdf_data)) > 10:
+                                try:
+                                    pdf_bytes = base64.b64decode(pdf_data)
+                                    st.download_button(label="🖨️ OTWÓRZ ETYKIETĘ", data=pdf_bytes, file_name=f"Etykieta_{z.get('nr')}.pdf", mime="application/pdf", use_container_width=True)
+                                except:
+                                    st.error("Błąd pliku PDF")
+                            
+                            if st.button("ZAKOŃCZ", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                move_to_history(z['id'])
+                                st.rerun()
+
+        with tab_dyspo:
+            for d in dyspo_pracownik:
+                with st.container(border=True):
+                    st.markdown(f"<div style='background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 15px; border-radius: 8px;'><b>📌 DYSPOZYCJA:</b><br>{d.get('tresc')}</div>", unsafe_allow_html=True)
+                    if st.button("ZROBIONE", key=f"dysp_{d['id']}", use_container_width=True):
+                        move_dyspozycja_to_history(d['id'])
+                        st.rerun()
+
+        with tab_zwroty:
+            with st.form("form_zwrot", clear_on_submit=True):
+                nr_zwr = st.text_input("Numer zamówienia")
+                stan_zwr = st.selectbox("Stan", ["Pełnowartościowy", "Uszkodzony"])
+                notatki_zwr = st.text_area("Notatki")
+                if st.form_submit_button("ZAREJESTRUJ ZWROT", type="primary"):
+                    if nr_zwr:
+                        zwroty_pracownik.insert(0, {"id": str(uuid.uuid4()), "nr": nr_zwr, "stan": stan_zwr, "status": "Nowy", "data": datetime.now().strftime("%Y-%m-%d %H:%M"), "notatki": notatki_zwr})
+                        save_data(ZWROTY_FILE, zwroty_pracownik)
+                        st.success("Zwrot zapisany!")
+                    else: st.error("Podaj numer.")
+
+        with tab_hist:
+            hist = load_data(HIST_FILE)[:10] 
+            for h in hist:
+                with st.expander(f"✔️ {h.get('nr')} | {h.get('data_pakowania')}"):
+                    if st.button("Cofnij", key=f"w_undo_{h['id']}", use_container_width=True):
+                        restore_from_history(h['id']); st.rerun()
