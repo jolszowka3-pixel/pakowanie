@@ -3,13 +3,15 @@ import json
 import os
 import uuid
 import base64
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 import streamlit.components.v1 as components
 from datetime import datetime, date
 
 # --- 1. KONFIGURACJA STRONY ---
 st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
-# --- 2. PROFESJONALNY CSS (ENTERPRISE THEME) ---
+# --- 2. PROFESJONALNY CSS ---
 st.markdown("""
 <style>
     .stApp { background-color: #f4f6f9; }
@@ -18,7 +20,6 @@ st.markdown("""
     header {visibility: hidden;} 
     footer {visibility: hidden;} 
     [data-testid="collapsedControl"] {display: none !important;} 
-    
     div[data-testid="stVerticalBlock"] div[style*="border"] {
         border-radius: 16px !important;
         background-color: #ffffff !important;
@@ -26,12 +27,10 @@ st.markdown("""
         box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.08) !important;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
-    
     div[data-testid="stVerticalBlock"] div[style*="border"]:hover {
         transform: translateY(-4px);
         box-shadow: 0 20px 40px -5px rgba(15, 23, 42, 0.12) !important;
     }
-    
     button[kind="primary"] {
         background-color: #1e3a8a !important; 
         color: #ffffff !important;
@@ -42,72 +41,71 @@ st.markdown("""
         letter-spacing: 0.5px;
         transition: all 0.2s;
     }
-    button[kind="primary"]:hover {
-        background-color: #172554 !important; 
-        box-shadow: 0 6px 15px rgba(30, 58, 138, 0.3) !important;
-    }
-    
+    button[kind="primary"]:hover { background-color: #172554 !important; box-shadow: 0 6px 15px rgba(30, 58, 138, 0.3) !important; }
     div[data-testid="stMetricValue"] { color: #1e3a8a !important; font-weight: 800 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. BAZA DANYCH I FOLDERY ---
-ZAM_FILE = "zamowienia.json"
-HIST_FILE = "historia.json"
-DYSPOZYCJE_FILE = "dyspozycje.json"
-HIST_DYSPOZYCJI_FILE = "historia_dyspozycji.json"
-ZWROTY_FILE = "zwroty.json" # Nowy plik bazy zwrotów
-LABELS_DIR = "etykiety" 
+# --- 3. GOOGLE SHEETS BAZA DANYCH ---
+# Połączenie z Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
 
+# Nazwy kart w Google Sheets (Worksheets)
+ZAM_FILE = "Zamowienia"
+HIST_FILE = "Historia"
+DYSPOZYCJE_FILE = "Dyspozycje"
+ZWROTY_FILE = "Zwroty"
+
+# Katalog na pliki PDF (nadal lokalnie)
+LABELS_DIR = "etykiety" 
 if not os.path.exists(LABELS_DIR):
     os.makedirs(LABELS_DIR)
 
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-def load_data(file):
-    if not os.path.exists(file): return []
-    with open(file, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except: return []
+def load_data(sheet_name):
+    try:
+        # ttl=0 wymusza pobranie najświeższych danych
+        df = conn.read(worksheet=sheet_name, ttl=0)
+        df = df.dropna(how='all') # Usunięcie pustych wierszy z Excela
+        return df.to_dict(orient="records")
+    except Exception as e:
+        return []
 
-def save_data(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def save_data(sheet_name, data):
+    # Zamiana listy na format czytelny dla Excela i aktualizacja arkusza
+    df = pd.DataFrame(data)
+    conn.update(worksheet=sheet_name, data=df)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
     hist = load_data(HIST_FILE)
-    order = next((x for x in zam if x['id'] == order_id), None)
+    order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         hist.insert(0, order)
-        zam = [x for x in zam if x['id'] != order_id]
+        zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
     hist = load_data(HIST_FILE)
-    order = next((x for x in hist if x['id'] == order_id), None)
+    order = next((x for x in hist if str(x.get('id')) == str(order_id)), None)
     if order:
         if 'data_pakowania' in order: del order['data_pakowania']
         zam.append(order)
-        zam.sort(key=lambda x: x.get('termin', '9999-12-31'))
-        hist = [x for x in hist if x['id'] != order_id]
+        zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
+        hist = [x for x in hist if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
-    hist = load_data(HIST_DYSPOZYCJI_FILE)
-    task = next((x for x in dyspo if x['id'] == dysp_id), None)
-    if task:
-        task['data_wykonania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        hist.insert(0, task)
-        dyspo = [x for x in dyspo if x['id'] != dysp_id]
-        save_data(DYSPOZYCJE_FILE, dyspo)
-        save_data(HIST_DYSPOZYCJI_FILE, hist)
+    # Dla uproszczenia dyspozycje usuwamy bez osobnej historii w arkuszu
+    dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
+    save_data(DYSPOZYCJE_FILE, dyspo)
 
 # --- 4. SESJA I LOGOWANIE ---
 if 'rola' not in st.session_state: 
@@ -140,7 +138,6 @@ else:
     #             PANEL ADMINISTRATORA
     # ==========================================
     if st.session_state.rola == 'szef':
-        
         with st.sidebar:
             st.markdown("**Użytkownik:** Administrator 👨‍💼")
             st.divider()
@@ -156,11 +153,10 @@ else:
         
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
         
-        do_spakowania_dzisiaj = sum(1 for z in zam_data if z.get('termin') == dzisiaj_str or z.get('termin', '9999-12-31') < dzisiaj_str)
-        spakowane_dzisiaj = sum(1 for h in hist_data if h.get('data_pakowania', '').startswith(dzisiaj_str))
+        do_spakowania_dzisiaj = sum(1 for z in zam_data if str(z.get('termin', '9999-12-31')) <= dzisiaj_str)
+        spakowane_dzisiaj = sum(1 for h in hist_data if str(h.get('data_pakowania', '')).startswith(dzisiaj_str))
         oczekujace_zwroty = sum(1 for z in zwroty_data if z.get('status') == 'Nowy')
         
-        # Dashboard: Zmieniona metryka 4 na ostrzeżenie o zwrotach jeśli jakieś są
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(label="Wszystkie w kolejce", value=len(zam_data))
         m2.metric(label="Wymagane na dzisiaj", value=do_spakowania_dzisiaj)
@@ -171,7 +167,6 @@ else:
             m4.metric(label="Oczekujące zwroty", value=oczekujace_zwroty)
         st.divider()
         
-        # ZAKŁADKI SZEFA (5 sztuk)
         t1, t2, t3, t4, t5 = st.tabs(["➕ Nowe Zlecenie", "📦 Aktywne na Produkcji", "🗄️ Baza Historyczna", "📝 Zadania", "↩️ Zwroty i Reklamacje"])
 
         with t1:
@@ -179,14 +174,14 @@ else:
             with col_form:
                 with st.form("add_form", clear_on_submit=True):
                     st.markdown("#### Utwórz nowe zlecenie kompletacji")
-                    nr = st.text_input("Indeks / Numer zamówienia", placeholder="np. ZAM/2026/04/16-01")
+                    nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
-                    co = st.text_area("Specyfikacja (co spakować)", placeholder="Wprowadź listę produktów...")
+                    co = st.text_area("Specyfikacja (co spakować)")
                     plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (opcjonalnie)", type=["pdf"])
                     
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
-                            if len(zam_data) > 0 and zam_data[-1]['nr'] == nr:
+                            if len(zam_data) > 0 and str(zam_data[-1].get('nr')) == str(nr):
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
@@ -199,13 +194,11 @@ else:
                                     has_label = True
 
                                 zam_data.append({
-                                    "id": new_id, 
-                                    "nr": nr, 
-                                    "co": co, 
+                                    "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
                                     "ma_etykiete": has_label
                                 })
-                                zam_data.sort(key=lambda x: x.get('termin', '9999-12-31'))
+                                zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
@@ -215,23 +208,18 @@ else:
         with t2:
             st.markdown("#### Zlecenia w trakcie realizacji przez pakownię")
             if not zam_data:
-                st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń na ekranie.")
+                st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń.")
             else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if z.get('ma_etykiete'):
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        if z.get('ma_etykiete'): info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
-                            zam_data = [x for x in zam_data if x['id'] != z['id']]
+                            zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
-                            pdf_path = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
-                            if os.path.exists(pdf_path):
-                                os.remove(pdf_path)
-                            st.toast(f"Zlecenie {z['nr']} wycofane z produkcji.", icon="🗑️")
                             st.rerun()
 
         with t3:
@@ -240,12 +228,11 @@ else:
                 st.info("Brak wpisów w dzienniku.")
             else:
                 for h in hist_data:
-                    with st.expander(f"✔️ ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
+                    with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        col_info.markdown(f"**Szczegóły:**<br>{h['co']}", unsafe_allow_html=True)
+                        col_info.markdown(f"**Szczegóły:**<br>{h.get('co')}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
-                            st.toast("Zlecenie cofnięte.", icon="🔄")
                             st.rerun()
                 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -260,91 +247,70 @@ else:
             with col_d1:
                 with st.form("form_dyspozycja", clear_on_submit=True):
                     st.markdown("#### Dodaj nowe zadanie poboczne")
-                    tresc_dysp = st.text_area("Treść zadania / Komunikat", placeholder="np. Posprzątaj stanowisko nr 2...")
+                    tresc_dysp = st.text_area("Treść zadania")
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
                             dyspo_data.insert(0, {
-                                "id": str(uuid.uuid4()),
-                                "tresc": tresc_dysp,
+                                "id": str(uuid.uuid4()), "tresc": tresc_dysp,
                                 "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")
                             })
                             save_data(DYSPOZYCJE_FILE, dyspo_data)
-                            st.toast("Wysłano dyspozycję na magazyn!", icon="✅")
                             st.rerun()
-                        else:
-                            st.toast("Wpisz treść dyspozycji.", icon="❗️")
-                            
             with col_d2:
-                st.markdown("#### Aktywne zadania na magazynie")
+                st.markdown("#### Aktywne zadania")
                 if not dyspo_data:
                     st.info("Brak aktywnych zadań.")
                 else:
                     for d in dyspo_data:
                         with st.container(border=True):
-                            st.markdown(f"**Wysłano:** {d['data_dodania']}<br>{d['tresc']}", unsafe_allow_html=True)
-                            if st.button("Usuń (Anuluj)", key=f"del_dysp_{d['id']}"):
-                                dyspo_data = [x for x in dyspo_data if x['id'] != d['id']]
+                            st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
+                            if st.button("Usuń", key=f"del_dysp_{d['id']}"):
+                                dyspo_data = [x for x in dyspo_data if str(x.get('id')) != str(d['id'])]
                                 save_data(DYSPOZYCJE_FILE, dyspo_data)
                                 st.rerun()
                                 
-        # --- ZAKŁADKA 5: ZWROTY (NOWA) ---
         with t5:
             st.markdown("#### Obsługa Zwrotów i Reklamacji (RMA)")
-            
-            # Podział na nowe zwroty i historię zwrotów
             nowe_zwroty = [z for z in zwroty_data if z.get('status') == 'Nowy']
             stare_zwroty = [z for z in zwroty_data if z.get('status') == 'Rozpatrzony']
             
             st.markdown("##### 🔴 Oczekujące na Twoją decyzję")
             if not nowe_zwroty:
-                st.success("Wszystkie zwroty zostały rozpatrzone. Czyste konto!")
+                st.success("Wszystkie zwroty zostały rozpatrzone.")
             else:
                 for z in nowe_zwroty:
-                    # Czerwone obramowanie dla nowych zwrotów
                     with st.container(border=True):
                         col1, col2 = st.columns([3, 1])
                         with col1:
-                            st.markdown(f"<span style='color:#ef4444; font-weight:bold; font-size:18px;'>ZAMÓWIENIE NR: {z['nr']}</span>", unsafe_allow_html=True)
-                            st.write(f"**Zgłoszono na magazynie:** {z['data']}")
-                            st.write(f"**Powód zwrotu:** {z['powod']}  |  **Stan towaru po inspekcji:** {z['stan']}")
-                            if z.get('notatki'):
-                                st.info(f"Notatki pracownika: {z['notatki']}")
+                            st.markdown(f"<span style='color:#ef4444; font-weight:bold; font-size:18px;'>ZAMÓWIENIE NR: {z.get('nr')}</span>", unsafe_allow_html=True)
+                            st.write(f"**Zgłoszono:** {z.get('data')} | **Stan:** {z.get('stan')}")
                         with col2:
-                            st.write("") # Odstęp
-                            if st.button("Oznacz jako Rozpatrzone / Oddaj Środki", key=f"zwr_{z['id']}", use_container_width=True, type="primary"):
+                            if st.button("Rozpatrzono", key=f"zwr_{z['id']}", use_container_width=True, type="primary"):
                                 for item in zwroty_data:
                                     if item['id'] == z['id']:
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                                 save_data(ZWROTY_FILE, zwroty_data)
-                                st.toast(f"Zwrot {z['nr']} zamknięty!", icon="✅")
                                 st.rerun()
-            
             st.divider()
-            st.markdown("##### 📁 Archiwum rozwiązanych zwrotów")
-            if not stare_zwroty:
-                st.info("Brak historii.")
-            else:
-                with st.expander("Rozwiń archiwum zwrotów"):
-                    for z in stare_zwroty:
-                        st.markdown(f"**{z['nr']}** - Zgłoszony: {z['data']} | Zakończony: {z['data_rozpatrzenia']} | Stan: {z['stan']}")
+            with st.expander("📁 Archiwum rozwiązanych zwrotów"):
+                for z in stare_zwroty:
+                    st.markdown(f"**{z.get('nr')}** - Stan: {z.get('stan')}")
 
     # ==========================================
     #           TERMINAL PRACOWNIKA (KDS)
     # ==========================================
     elif st.session_state.rola == 'pracownik':
-        
         zam_pracownik = load_data(ZAM_FILE)
         dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
         zwroty_pracownik = load_data(ZWROTY_FILE)
         
-        if 'znane_zam' not in st.session_state:
-            st.session_state.znane_zam = {z['id'] for z in zam_pracownik}
-        if 'znane_dysp' not in st.session_state:
-            st.session_state.znane_dysp = {d['id'] for d in dyspo_pracownik}
+        # Audio Alert
+        if 'znane_zam' not in st.session_state: st.session_state.znane_zam = {str(z.get('id')) for z in zam_pracownik}
+        if 'znane_dysp' not in st.session_state: st.session_state.znane_dysp = {str(d.get('id')) for d in dyspo_pracownik}
 
-        aktualne_zam_ids = {z['id'] for z in zam_pracownik}
-        aktualne_dysp_ids = {d['id'] for d in dyspo_pracownik}
+        aktualne_zam_ids = {str(z.get('id')) for z in zam_pracownik}
+        aktualne_dysp_ids = {str(d.get('id')) for d in dyspo_pracownik}
 
         nowe_zam = aktualne_zam_ids - st.session_state.znane_zam
         nowe_dysp = aktualne_dysp_ids - st.session_state.znane_dysp
@@ -353,11 +319,7 @@ else:
         st.session_state.znane_dysp = aktualne_dysp_ids
 
         if nowe_zam or nowe_dysp:
-            st.markdown("""
-            <audio autoplay>
-                <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
-            </audio>
-            """, unsafe_allow_html=True)
+            st.markdown("""<audio autoplay><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>""", unsafe_allow_html=True)
             st.toast("🔔 Nowe zadanie na terminalu!", icon="🔔")
 
         c1, c2, c3 = st.columns([6, 1, 1])
@@ -367,97 +329,51 @@ else:
             st.session_state.rola = None
             st.rerun()
 
-        # ZAKŁADKI PRACOWNIKA (+ Przyjmij Zwrot)
         tab_kds, tab_dyspo, tab_zwroty, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "↩️ PRZYJMIJ ZWROT", "🕒 OSTATNIE OPERACJE"])
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         with tab_kds:
             if not zam_pracownik:
-                st.markdown("""
-                <div style='text-align: center; padding: 100px 0;'>
-                    <h1 style='font-size: 40px; color: #94a3b8;'>Brak aktywnych zleceń</h1>
-                    <p style='color: #cbd5e1; font-size: 20px;'>Kolejka jest pusta. Oczekuj na nowe zadania.</p>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
                 cols = st.columns(3)
                 for i, z in enumerate(zam_pracownik):
                     with cols[i % 3]:
                         with st.container(border=True):
-                            termin_zlecenia = z.get('termin', '9999-12-31')
-                            if termin_zlecenia < dzisiaj_str:
-                                badge_html = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {termin_zlecenia}</div>"
-                            elif termin_zlecenia == dzisiaj_str:
-                                badge_html = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
-                            else:
-                                badge_html = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {termin_zlecenia}</div>"
+                            termin_zlecenia = str(z.get('termin', '9999-12-31'))
+                            if termin_zlecenia < dzisiaj_str: badge_html = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {termin_zlecenia}</div>"
+                            elif termin_zlecenia == dzisiaj_str: badge_html = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
+                            else: badge_html = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {termin_zlecenia}</div>"
 
                             st.markdown(f"""
                             <div style='text-align:center;'>
                                 {badge_html}
-                                <div style='color: #64748b; font-size: 14px; text-transform: uppercase; font-weight: bold; letter-spacing: 1px;'>Zlecenie Nr</div>
-                                <div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; color: #0f172a;'>{z['nr']}</div>
-                                <hr style='margin: 15px 0; border: none; border-top: 1px dashed #cbd5e1;'>
-                                <div style='font-size: 20px; font-weight: 600; margin-bottom: 20px; color: #334155;'>{z['co']}</div>
+                                <div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div>
+                                <div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div>
+                                <hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'>
+                                <div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div>
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            if z.get('ma_etykiete'):
-                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
+                            if z.get('ma_etykiete') in [True, "True", "TRUE", "true"]:
+                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
                                 if os.path.exists(sciezka_pdf):
                                     with open(sciezka_pdf, "rb") as pdf_file:
                                         base64_pdf = base64.b64encode(pdf_file.read()).decode('utf-8')
-                                        
-                                    html_code = f"""
-                                    <html>
-                                    <head>
-                                        <style>
-                                            .btn {{
-                                                display: block; width: 100%; padding: 12px 0; 
-                                                background-color: #f59e0b; color: white; 
-                                                text-align: center; text-decoration: none; 
-                                                border-radius: 8px; font-family: Arial, sans-serif; 
-                                                font-size: 15px; font-weight: bold; cursor: pointer;
-                                                box-sizing: border-box; transition: background 0.3s;
-                                            }}
-                                            .btn:hover {{ background-color: #d97706; }}
-                                        </style>
-                                    </head>
-                                    <body style="margin:0; padding:0;">
-                                        <script>
-                                        function init() {{
-                                            const b64 = "{base64_pdf}";
-                                            const bin = atob(b64);
-                                            const arr = new Uint8Array(bin.length);
-                                            for(let i=0; i<bin.length; i++) {{
-                                                arr[i] = bin.charCodeAt(i);
-                                            }}
-                                            const blob = new Blob([arr], {{type: 'application/pdf'}});
-                                            const url = URL.createObjectURL(blob);
-                                            document.getElementById('pdflink').href = url;
-                                        }}
-                                        window.onload = init;
-                                        </script>
-                                        <a id="pdflink" target="_blank" class="btn">🖨️ OTWÓRZ DO DRUKU</a>
-                                    </body>
-                                    </html>
-                                    """
-                                    components.html(html_code, height=50)
+                                    st.markdown(f'''
+                                    <div style="margin-bottom: 20px;">
+                                        <div style="color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px;">📄 PODGLĄD ETYKIETY</div>
+                                        <iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="300px" style="border: 2px solid #e2e8f0; border-radius: 8px;"></iframe>
+                                    </div>
+                                    ''', unsafe_allow_html=True)
                             
-                            st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
-                                st.toast(f"Spakowano: {z['nr']}", icon="✔️")
                                 st.rerun()
 
         with tab_dyspo:
             if not dyspo_pracownik:
-                st.markdown("""
-                <div style='text-align: center; padding: 80px 0;'>
-                    <h1 style='font-size: 35px; color: #94a3b8;'>Brak dodatkowych zadań</h1>
-                    <p style='color: #cbd5e1; font-size: 18px;'>Wszystkie dyspozycje zostały wykonane.</p>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown("<div style='text-align: center; padding: 80px 0;'><h1 style='color: #94a3b8;'>Brak dodatkowych zadań</h1></div>", unsafe_allow_html=True)
             else:
                 d_cols = st.columns(3)
                 for i, d in enumerate(dyspo_pracownik):
@@ -465,47 +381,34 @@ else:
                         with st.container(border=True):
                             st.markdown(f"""
                             <div style='background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 15px;'>
-                                <div style='color: #b45309; font-size: 12px; font-weight: bold; margin-bottom: 5px;'>📌 DYSPOZYCJA Z: {d.get('data_dodania', '')}</div>
-                                <div style='font-size: 18px; font-weight: 600; color: #451a03;'>{d['tresc']}</div>
+                                <div style='color: #b45309; font-size: 12px; font-weight: bold;'>📌 DYSPOZYCJA Z: {d.get('data_dodania', '')}</div>
+                                <div style='font-size: 18px; font-weight: 600;'>{d.get('tresc')}</div>
                             </div>
                             """, unsafe_allow_html=True)
-                            
                             if st.button("POTWIERDŹ WYKONANIE", key=f"dysp_{d['id']}", use_container_width=True):
                                 move_dyspozycja_to_history(d['id'])
-                                st.toast("Zadanie odhaczone!", icon="👍")
                                 st.rerun()
 
-        # --- ZAKŁADKA 3: PRZYJMIJ ZWROT (NOWA) ---
         with tab_zwroty:
             st.markdown("### Wprowadź paczkę zwrotną do systemu")
             col1, col2 = st.columns([1, 1])
-            
             with col1:
                 with st.form("formularz_zwrotu", clear_on_submit=True):
-                    nr_zwr = st.text_input("Numer zwracanego zamówienia", placeholder="np. ZAM/001 (z etykiety na paczce)")
-                    stan_zwr = st.selectbox("W jakim stanie jest zwrócony towar?", ["Pełnowartościowy (Nowy)", "Uszkodzony przez klienta", "Uszkodzony w transporcie", "Niebrakujący towar (częściowy zwrot)"])
-                    powod_zwr = st.selectbox("Podany powód zwrotu (jeśli jest na formularzu)", ["Brak formularza", "Odstąpienie 14 dni", "Reklamacja / Wada towaru", "Pomyłka przy pakowaniu"])
-                    notatki_zwr = st.text_area("Uwagi dla szefa (opcjonalnie)", placeholder="np. brakuje kabla zasilającego...")
-                    
-                    if st.form_submit_button("ZAREJESTRUJ ZWROT W SYSTEMIE", type="primary"):
+                    nr_zwr = st.text_input("Numer zwracanego zamówienia")
+                    stan_zwr = st.selectbox("Stan towaru", ["Pełnowartościowy", "Uszkodzony"])
+                    powod_zwr = st.selectbox("Powód zwrotu", ["Brak", "Odstąpienie 14 dni", "Reklamacja"])
+                    notatki_zwr = st.text_area("Uwagi dla szefa")
+                    if st.form_submit_button("ZAREJESTRUJ ZWROT", type="primary"):
                         if nr_zwr:
-                            nowy_zwrot = {
-                                "id": str(uuid.uuid4()),
-                                "nr": nr_zwr,
-                                "stan": stan_zwr,
-                                "powod": powod_zwr,
-                                "notatki": notatki_zwr,
-                                "status": "Nowy",
+                            zwroty_pracownik.insert(0, {
+                                "id": str(uuid.uuid4()), "nr": nr_zwr, "stan": stan_zwr,
+                                "powod": powod_zwr, "notatki": notatki_zwr, "status": "Nowy",
                                 "data": datetime.now().strftime("%Y-%m-%d %H:%M")
-                            }
-                            zwroty_pracownik.insert(0, nowy_zwrot)
+                            })
                             save_data(ZWROTY_FILE, zwroty_pracownik)
-                            st.success(f"Zwrot paczki {nr_zwr} przekazany szefowi!")
-                        else:
-                            st.error("Podaj chociaż numer zamówienia.")
-            
-            with col2:
-                st.info("💡 **Instrukcja dla pakowni:**\n\n1. Otwórz karton zwrotny.\n2. Znajdź numer zamówienia (na liście przewozowym lub formularzu).\n3. Obejrzyj towar.\n4. Zarejestruj zwrot w formularzu po lewej.\n5. Odłóż towar na strefę zwrotów.")
+                            st.toast("Zwrot zarejestrowany!", icon="✅")
+                            st.rerun()
+                        else: st.error("Podaj chociaż numer zamówienia.")
 
         with tab_hist:
             hist = load_data(HIST_FILE)[:15] 
@@ -513,10 +416,9 @@ else:
                 st.info("Brak historii z dzisiejszej zmiany.")
             else:
                 for h in hist:
-                    with st.expander(f"✔️ ZAM: {h['nr']}  |  Wykonano: {h.get('data_pakowania', '')}"):
+                    with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', '')}"):
                         col1, col2 = st.columns([3, 1])
-                        col1.write(f"**Zawartość:** {h['co']}")
+                        col1.write(f"**Zawartość:** {h.get('co')}")
                         if col2.button("Cofnij zlecenie na ekran", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
-                            st.toast(f"Cofnięto zamówienie {h['nr']}", icon="↩️")
                             st.rerun()
