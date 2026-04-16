@@ -5,6 +5,7 @@ import uuid
 import base64
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
+import streamlit.components.v1 as components
 from datetime import datetime, date
 
 # --- 1. KONFIGURACJA STRONY ---
@@ -66,14 +67,13 @@ SHEET_HEADERS = {
     "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
-# ZOPTYMALIZOWANE POBIERANIE (Cache 10 minut = Ochrona limitu)
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name, ttl="10m")
+        df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
         df = df.fillna("") 
         return df.to_dict(orient="records")
-    except Exception as e:
+    except Exception:
         return []
 
 def save_data(sheet_name, data):
@@ -83,7 +83,6 @@ def save_data(sheet_name, data):
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
-        st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
@@ -103,10 +102,7 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
-        
-        ma_etykiete = str(order.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
-        if ma_etykiete:
-            usun_etykiete(order_id)
+        usun_etykiete(order_id) # Zwalniamy miejsce po spakowaniu
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -163,7 +159,6 @@ else:
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
         if c3.button("Wyloguj się", use_container_width=True):
             st.session_state.rola = None
-            st.cache_data.clear() 
             st.rerun()
         st.divider()
 
@@ -171,6 +166,7 @@ else:
         hist_data = load_data(HIST_FILE)
         dyspo_data = load_data(DYSPOZYCJE_FILE)
         zwroty_data = load_data(ZWROTY_FILE)
+        etykiety_baza = load_data(ETYKIETY_FILE) # Ładujemy raz, żeby było szybko
         
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
@@ -208,12 +204,11 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                has_label = "False"
                                 
+                                # CIĘCIE I WGRYWANIE DO ARKUSZA "Etykiety"
                                 if plik_etykiety is not None:
                                     pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
                                     chunk_size = 45000 
-                                    etykiety_baza = load_data(ETYKIETY_FILE) 
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etykiety_baza.append({
@@ -222,12 +217,11 @@ else:
                                             "dane": chunk
                                         })
                                     save_data(ETYKIETY_FILE, etykiety_baza)
-                                    has_label = "True"
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": has_label
+                                    "ma_etykiete": "True" # To pole jest już tylko informacyjne
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
@@ -241,22 +235,21 @@ else:
             if not zam_data:
                 st.info("Obecnie pracownicy nie mają żadnych aktywnych zleceń.")
             else:
-                etykiety_baza = load_data(ETYKIETY_FILE) # Sprawdzamy czy fizycznie są
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
                         
-                        ma_etykiete = str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
-                        if ma_etykiete: 
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta dołączona</span>"
+                        # ZMIANA: Sprawdzamy czy fizycznie w arkuszu Etykiety są dane dla tego ID
+                        czy_ma_plik = any(str(e.get('zam_id')) == str(z['id']) for e in etykiety_baza)
+                        if czy_ma_plik: 
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
-                            if ma_etykiete:
-                                usun_etykiete(z['id']) 
+                            usun_etykiete(z['id']) 
                             st.rerun()
 
         with t3:
@@ -342,6 +335,7 @@ else:
         dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
         zwroty_pracownik = load_data(ZWROTY_FILE)
         
+        # Audio Alert
         if 'znane_zam' not in st.session_state: st.session_state.znane_zam = {str(z.get('id')) for z in zam_pracownik}
         if 'znane_dysp' not in st.session_state: st.session_state.znane_dysp = {str(d.get('id')) for d in dyspo_pracownik}
 
@@ -360,12 +354,9 @@ else:
 
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
-        if c2.button("🔄 Odśwież", use_container_width=True): 
-            st.cache_data.clear() 
-            st.rerun()
+        if c2.button("🔄 Odśwież", use_container_width=True): st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
-            st.cache_data.clear()
             st.rerun()
 
         tab_kds, tab_dyspo, tab_zwroty, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "↩️ PRZYJMIJ ZWROT", "🕒 OSTATNIE OPERACJE"])
@@ -377,11 +368,8 @@ else:
             else:
                 cols = st.columns(3)
                 
-                czy_sa_etykiety = any(str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes'] for z in zam_pracownik)
-                if czy_sa_etykiety:
-                    etykiety_pracownik = load_data(ETYKIETY_FILE)
-                else:
-                    etykiety_pracownik = []
+                # Ładujemy bazę etykiet JEDEN RAZ na górze dla optymalizacji
+                etykiety_pracownik = load_data(ETYKIETY_FILE)
                 
                 for i, z in enumerate(zam_pracownik):
                     with cols[i % 3]:
@@ -401,29 +389,82 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            ma_etykiete = str(z.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda', 'yes']
+                            # --- ZMIANA: Szukamy kawałków po zam_id (omijamy sprawdzanie ma_etykiete) ---
+                            kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
                             
-                            # --- NOWE PODEJŚCIE: WBUDOWANY PODGLĄD PDF ---
-                            if ma_etykiete:
-                                kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
-                                if kawalki:
-                                    kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
-                                    pelny_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
-                                    
-                                    # Wyświetlanie PDFa bezpośrednio na ekranie
-                                    pdf_display = f'<iframe src="data:application/pdf;base64,{pelny_b64}" width="100%" height="300" type="application/pdf" style="border:1px solid #cbd5e1; border-radius:8px; margin-bottom:15px;"></iframe>'
-                                    st.markdown(pdf_display, unsafe_allow_html=True)
-                                    st.caption("👆 Użyj ikony drukarki na podglądzie powyżej, aby wydrukować etykietę.")
-                                    
-                            # Pod spodem standardowy przycisk zakańczania
-                            st.button(
-                                "✔️ ZAKOŃCZ ZLECENIE", 
-                                key=f"kds_{z['id']}", 
-                                use_container_width=True, 
-                                type="primary",
-                                on_click=move_to_history,
-                                args=(z['id'],)
-                            )
+                            if kawalki:
+                                kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
+                                
+                                html_code = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                <style>
+                                    body {{ margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }}
+                                    .btn {{
+                                        width: 100%;
+                                        padding: 0.5rem 1rem;
+                                        background-color: #f8fafc;
+                                        color: #1e3a8a;
+                                        border: 2px solid #1e3a8a;
+                                        border-radius: 8px;
+                                        font-size: 16px;
+                                        font-weight: bold;
+                                        cursor: pointer;
+                                        box-sizing: border-box;
+                                        height: 45px;
+                                        display: flex;
+                                        align-items: center;
+                                        justify-content: center;
+                                        transition: all 0.2s;
+                                    }}
+                                    .btn:hover {{
+                                        background-color: #1e3a8a;
+                                        color: #ffffff;
+                                    }}
+                                </style>
+                                </head>
+                                <body>
+                                    <button class="btn" onclick="printPDF()">🖨️ DRUKUJ ETYKIETĘ</button>
+                                    <script>
+                                    function printPDF() {{
+                                        const b64 = "{pdf_b64}";
+                                        const byteCharacters = atob(b64);
+                                        const byteNumbers = new Array(byteCharacters.length);
+                                        for (let i = 0; i < byteCharacters.length; i++) {{
+                                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                        }}
+                                        const byteArray = new Uint8Array(byteNumbers);
+                                        const blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        
+                                        const printFrame = document.createElement('iframe');
+                                        printFrame.style.display = 'none';
+                                        printFrame.src = blobUrl;
+                                        document.body.appendChild(printFrame);
+                                        
+                                        printFrame.onload = function() {{
+                                            setTimeout(function() {{
+                                                try {{
+                                                    printFrame.contentWindow.focus();
+                                                    printFrame.contentWindow.print();
+                                                }} catch (e) {{
+                                                    window.open(blobUrl, '_blank');
+                                                }}
+                                            }}, 250);
+                                        }};
+                                    }}
+                                    </script>
+                                </body>
+                                </html>
+                                """
+                                components.html(html_code, height=55)
+                            
+                            st.write("") 
+                            if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                move_to_history(z['id'])
+                                st.rerun()
 
         with tab_dyspo:
             if not dyspo_pracownik:
