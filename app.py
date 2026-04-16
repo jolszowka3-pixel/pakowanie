@@ -3,12 +3,12 @@ import json
 import os
 import uuid
 
-# Zmiana layoutu na 'wide' - aplikacja zajmie cały ekran (idealne dla monitorów na produkcji)
-st.set_page_config(page_title="System Pakowni", page_icon="📦", layout="wide")
+# Konfiguracja: szeroki ekran i domyślnie schowany pasek boczny (dla czystości ekranu)
+st.set_page_config(page_title="System Pakowni", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
 DATA_FILE = "zamowienia.json"
 
-# --- HASŁA DOSTĘPU (Zmień na własne!) ---
+# --- HASŁA DOSTĘPU ---
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
@@ -29,7 +29,6 @@ def save_orders(orders):
 def update_state():
     st.session_state.orders = load_orders()
 
-# --- INICJALIZACJA STANU APLIKACJI ---
 if 'orders' not in st.session_state:
     st.session_state.orders = load_orders()
 
@@ -38,15 +37,13 @@ if 'rola' not in st.session_state:
 
 # --- EKRAN LOGOWANIA ---
 if st.session_state.rola is None:
-    # Wyśrodkowanie logowania mimo szerokiego ekranu
+    st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.title("🔐 Logowanie do systemu")
-        st.write("Wprowadź hasło, aby uzyskać dostęp do swojego panelu.")
-        
+        st.markdown("<h1 style='text-align: center;'>🔐 Kiosk Pakowni</h1>", unsafe_allow_html=True)
         with st.form("formularz_logowania"):
-            wpisane_haslo = st.text_input("Hasło", type="password")
-            zaloguj_btn = st.form_submit_button("Zaloguj", use_container_width=True)
+            wpisane_haslo = st.text_input("Podaj kod dostępu", type="password")
+            zaloguj_btn = st.form_submit_button("WEJDŹ", use_container_width=True)
             
             if zaloguj_btn:
                 if wpisane_haslo == HASLO_SZEFA:
@@ -56,24 +53,23 @@ if st.session_state.rola is None:
                     st.session_state.rola = 'pracownik'
                     st.rerun()
                 else:
-                    st.error("Błędne hasło! Spróbuj ponownie.")
+                    st.error("Błędny kod!")
 
 # --- WIDOKI PO ZALOGOWANIU ---
 else:
     # --- PANEL SZEFA ---
     if st.session_state.rola == 'szef':
-        # Pasek boczny tylko dla szefa
-        st.sidebar.title("Zalogowano jako: Szef 👨‍💼")
+        st.sidebar.title("Zalogowano: Szef 👨‍💼")
         if st.sidebar.button("Wyloguj się", use_container_width=True):
             st.session_state.rola = None
             st.rerun()
 
-        st.title("👨‍💼 Panel Szefa - Dodaj zamówienie")
+        st.title("👨‍💼 Panel Szefa - Dodawanie")
         
         with st.form("dodaj_zamowienie", clear_on_submit=True):
-            nr_zamowienia = st.text_input("Numer zamówienia", placeholder="np. ZAM/001/2026")
+            nr_zamowienia = st.text_input("Numer zamówienia", placeholder="np. 001")
             co_spakowac = st.text_area("Co spakować", placeholder="np. 2x Kubek czarny, 1x Koszulka M")
-            submit = st.form_submit_button("Przekaż do pakowania")
+            submit = st.form_submit_button("WŚLIJ NA EKRAN ➔")
             
             if submit:
                 if nr_zamowienia and co_spakowac:
@@ -83,52 +79,68 @@ else:
                         "co": co_spakowac
                     }
                     aktualne_zamowienia = load_orders()
-                    aktualne_zamowienia.insert(0, nowe_zamowienie)
+                    # Dodajemy na koniec listy, żeby stare zlecenia były od góry
+                    aktualne_zamowienia.append(nowe_zamowienie)
                     save_orders(aktualne_zamowienia)
                     update_state()
-                    st.success(f"Zamówienie {nr_zamowienia} zostało przekazane na produkcję!")
+                    st.success(f"Wysłano: {nr_zamowienia}")
                 else:
-                    st.error("Wypełnij oba pola przed dodaniem zamówienia!")
+                    st.error("Wypełnij oba pola!")
                     
-        st.divider()
         aktualne_zamowienia = load_orders()
-        st.info(f"📦 Aktualnie w kolejce u pracowników: **{len(aktualne_zamowienia)} paczek**")
+        st.info(f"📦 Aktualnie na ekranie u pracowników: **{len(aktualne_zamowienia)} zlec.**")
 
-    # --- PANEL PRACOWNIKA (CZYSTY EKRAN KIOSKOWY) ---
+    # --- PANEL PRACOWNIKA (STYL MCDONALD'S KDS) ---
     elif st.session_state.rola == 'pracownik':
-        # Górny pasek: Tytuł po lewej, przyciski po prawej
-        col_tytul, col_btn1, col_btn2 = st.columns([6, 1, 1])
-        with col_tytul:
-            st.title("📦 Ekran Pakowni")
-        with col_btn1:
-            if st.button("🔄 Odśwież", use_container_width=True):
+        
+        # Wstrzyknięcie CSS usuwającego marginesy i górne paski Streamlita
+        st.markdown("""
+        <style>
+            #MainMenu {visibility: hidden;}
+            header {visibility: hidden;}
+            footer {visibility: hidden;}
+            .block-container {padding-top: 1rem; max-width: 95%;}
+        </style>
+        """, unsafe_allow_html=True)
+
+        # Dyskretny pasek nawigacji na samej górze
+        col_odswiez, col_puste, col_wyloguj = st.columns([1, 8, 1])
+        with col_odswiez:
+            if st.button("🔄 Odśwież"):
                 update_state()
-        with col_btn2:
-            if st.button("Wyloguj", use_container_width=True):
+        with col_wyloguj:
+            if st.button("Wyloguj"):
                 st.session_state.rola = None
                 st.rerun()
                 
-        st.markdown("---")
+        st.markdown("<h2 style='text-align: center; margin-top: -20px; color: #E63946;'>🔴 DO SPAKOWANIA 🔴</h2>", unsafe_allow_html=True)
         
         aktualne_zamowienia = load_orders()
         
         if not aktualne_zamowienia:
-            st.success("Brak zamówień do spakowania. Można odpocząć!")
+            st.markdown("<h1 style='text-align: center; font-size: 60px; margin-top: 100px; color: #4CAF50;'>Brak zamówień. Dobra robota!</h1>", unsafe_allow_html=True)
         else:
-            # Wyświetlanie zamówień jako wyraźne kafelki na cały ekran
-            for z in aktualne_zamowienia:
-                with st.container(border=True): # Tworzy widoczną ramkę wokół zamówienia
-                    col_info, col_akcja = st.columns([4, 1])
-                    
-                    with col_info:
-                        st.subheader(f"Zamówienie: {z['nr']}")
-                        st.write(f"**Do spakowania:** {z['co']}")
+            # Tworzymy siatkę (3 zlecenia w jednym rzędzie)
+            cols = st.columns(3)
+            
+            for index, z in enumerate(aktualne_zamowienia):
+                # Wybiera odpowiednią kolumnę dla zamówienia (0, 1 lub 2)
+                col = cols[index % 3] 
+                
+                with col:
+                    with st.container(border=True):
+                        # Ogromny numer zamówienia i większy tekst zawartości
+                        st.markdown(f"""
+                        <div style="text-align: center;">
+                            <div style="font-size: 70px; font-weight: 900; line-height: 1;">{z['nr']}</div>
+                            <div style="font-size: 24px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;">{z['co']}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
-                    with col_akcja:
-                        st.write("") # Pusty wiersz dla wyśrodkowania w pionie
-                        # type="primary" nadaje przyciskowi wyraźny, główny kolor (zazwyczaj czerwony/niebieski w zależności od motywu)
-                        if st.button("✅ ZROBIONE", key=z['id'], use_container_width=True, type="primary"):
+                        # Wielki zielony przycisk (type="primary" nadaje mu kolor wiodący)
+                        if st.button("🟢 GOTOWE", key=z['id'], use_container_width=True, type="primary"):
                             aktualne_zamowienia = [item for item in aktualne_zamowienia if item['id'] != z['id']]
                             save_orders(aktualne_zamowienia)
                             update_state()
                             st.rerun()
+                    st.write("") # Dodatkowy odstęp między rzędami
