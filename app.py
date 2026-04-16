@@ -2,145 +2,144 @@ import streamlit as st
 import json
 import os
 import uuid
+from datetime import datetime
 
-# Konfiguracja: szeroki ekran i domyślnie schowany pasek boczny (dla czystości ekranu)
-st.set_page_config(page_title="System Pakowni", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
+# Konfiguracja
+st.set_page_config(page_title="System Pakowni PRO", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
-DATA_FILE = "zamowienia.json"
+ZAM_FILE = "zamowienia.json"
+HIST_FILE = "historia.json"
 
-# --- HASŁA DOSTĘPU ---
+# --- HASŁA ---
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# --- FUNKCJE BAZY DANYCH ---
-def load_orders():
-    if not os.path.exists(DATA_FILE):
-        return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return []
+# --- FUNKCJE DANYCH ---
+def load_data(file):
+    if not os.path.exists(file): return []
+    with open(file, "r", encoding="utf-8") as f:
+        try: return json.load(f)
+        except: return []
 
-def save_orders(orders):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(orders, f, ensure_ascii=False, indent=4)
+def save_data(file, data):
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-def update_state():
-    st.session_state.orders = load_orders()
+# --- LOGIKA PRZENOSZENIA ---
+def move_to_history(order_id):
+    zam = load_data(ZAM_FILE)
+    hist = load_data(HIST_FILE)
+    
+    order = next((x for x in zam if x['id'] == order_id), None)
+    if order:
+        order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        hist.insert(0, order) # Nowe na górę historii
+        zam = [x for x in zam if x['id'] != order_id]
+        save_data(ZAM_FILE, zam)
+        save_data(HIST_FILE, hist)
 
-if 'orders' not in st.session_state:
-    st.session_state.orders = load_orders()
+def restore_from_history(order_id):
+    zam = load_data(ZAM_FILE)
+    hist = load_data(HIST_FILE)
+    
+    order = next((x for x in hist if x['id'] == order_id), None)
+    if order:
+        if 'data_pakowania' in order: del order['data_pakowania']
+        zam.append(order) # Wraca na koniec kolejki
+        hist = [x for x in hist if x['id'] != order_id]
+        save_data(ZAM_FILE, zam)
+        save_data(HIST_FILE, hist)
 
-if 'rola' not in st.session_state:
-    st.session_state.rola = None
+# --- LOGOWANIE ---
+if 'rola' not in st.session_state: st.session_state.rola = None
 
-# --- EKRAN LOGOWANIA ---
 if st.session_state.rola is None:
     st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
-        st.markdown("<h1 style='text-align: center;'>🔐 Kiosk Pakowni</h1>", unsafe_allow_html=True)
-        with st.form("formularz_logowania"):
-            wpisane_haslo = st.text_input("Podaj kod dostępu", type="password")
-            zaloguj_btn = st.form_submit_button("WEJDŹ", use_container_width=True)
-            
-            if zaloguj_btn:
-                if wpisane_haslo == HASLO_SZEFA:
-                    st.session_state.rola = 'szef'
-                    st.rerun()
-                elif wpisane_haslo == HASLO_PRACOWNIKA:
-                    st.session_state.rola = 'pracownik'
-                    st.rerun()
-                else:
-                    st.error("Błędny kod!")
+        st.markdown("<h1 style='text-align: center;'>🔐 System Pakowni</h1>", unsafe_allow_html=True)
+        with st.form("login"):
+            h = st.text_input("Hasło", type="password")
+            if st.form_submit_button("ZALOGUJ", use_container_width=True):
+                if h == HASLO_SZEFA: st.session_state.rola = 'szef'; st.rerun()
+                elif h == HASLO_PRACOWNIKA: st.session_state.rola = 'pracownik'; st.rerun()
+                else: st.error("Błędne hasło")
 
-# --- WIDOKI PO ZALOGOWANIU ---
+# --- WIDOKI ---
 else:
-    # --- PANEL SZEFA ---
+    # Sidebar dla obu ról (wylogowanie)
+    if st.sidebar.button("WYLOGUJ"):
+        st.session_state.rola = None
+        st.rerun()
+
     if st.session_state.rola == 'szef':
-        st.sidebar.title("Zalogowano: Szef 👨‍💼")
-        if st.sidebar.button("Wyloguj się", use_container_width=True):
-            st.session_state.rola = None
-            st.rerun()
+        st.title("👨‍💼 Panel Zarządzania")
+        t1, t2 = st.tabs(["➕ Dodaj Zamówienie", "📜 Historia i Edycja"])
 
-        st.title("👨‍💼 Panel Szefa - Dodawanie")
-        
-        with st.form("dodaj_zamowienie", clear_on_submit=True):
-            nr_zamowienia = st.text_input("Numer zamówienia", placeholder="np. 001")
-            co_spakowac = st.text_area("Co spakować", placeholder="np. 2x Kubek czarny, 1x Koszulka M")
-            submit = st.form_submit_button("WŚLIJ NA EKRAN ➔")
-            
-            if submit:
-                if nr_zamowienia and co_spakowac:
-                    nowe_zamowienie = {
-                        "id": str(uuid.uuid4()),
-                        "nr": nr_zamowienia,
-                        "co": co_spakowac
-                    }
-                    aktualne_zamowienia = load_orders()
-                    # Dodajemy na koniec listy, żeby stare zlecenia były od góry
-                    aktualne_zamowienia.append(nowe_zamowienie)
-                    save_orders(aktualne_zamowienia)
-                    update_state()
-                    st.success(f"Wysłano: {nr_zamowienia}")
-                else:
-                    st.error("Wypełnij oba pola!")
-                    
-        aktualne_zamowienia = load_orders()
-        st.info(f"📦 Aktualnie na ekranie u pracowników: **{len(aktualne_zamowienia)} zlec.**")
+        with t1:
+            with st.form("add"):
+                nr = st.text_input("Numer zamówienia")
+                co = st.text_area("Co spakować")
+                if st.form_submit_button("WYŚLIJ NA PRODUKCJĘ"):
+                    if nr and co:
+                        d = load_data(ZAM_FILE)
+                        d.append({"id": str(uuid.uuid4()), "nr": nr, "co": co})
+                        save_data(ZAM_FILE, d)
+                        st.success("Dodano!")
+                        st.rerun()
 
-    # --- PANEL PRACOWNIKA (STYL MCDONALD'S KDS) ---
+        with t2:
+            st.subheader("Wszystkie spakowane zamówienia")
+            hist = load_data(HIST_FILE)
+            if not hist:
+                st.write("Historia jest pusta.")
+            else:
+                # Edytowalna tabela dla szefa
+                edited_hist = st.data_editor(hist, num_rows="dynamic", key="editor", use_container_width=True)
+                if st.button("ZAPISZ ZMIANY W HISTORII"):
+                    save_data(HIST_FILE, edited_hist)
+                    st.success("Zmiany zapisane!")
+                
+                st.divider()
+                st.write("Przywróć do pakowania (jeśli trzeba ponowić):")
+                to_restore = st.selectbox("Wybierz zamówienie do przywrócenia", 
+                                        options=[x['id'] for x in hist],
+                                        format_func=lambda x: next(i['nr'] for i in hist if i['id'] == x))
+                if st.button("PRZYWRÓĆ WYBRANE"):
+                    restore_from_history(to_restore)
+                    st.rerun()
+
     elif st.session_state.rola == 'pracownik':
+        # Styl KDS
+        st.markdown("""<style>#MainMenu, header, footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
         
-        # Wstrzyknięcie CSS usuwającego marginesy i górne paski Streamlita
-        st.markdown("""
-        <style>
-            #MainMenu {visibility: hidden;}
-            header {visibility: hidden;}
-            footer {visibility: hidden;}
-            .block-container {padding-top: 1rem; max-width: 95%;}
-        </style>
-        """, unsafe_allow_html=True)
+        col_t, col_r = st.columns([8, 1])
+        col_t.markdown("<h1 style='color: #E63946;'>📦 DO SPAKOWANIA</h1>", unsafe_allow_html=True)
+        if col_r.button("🔄 Odśwież"): st.rerun()
 
-        # Dyskretny pasek nawigacji na samej górze
-        col_odswiez, col_puste, col_wyloguj = st.columns([1, 8, 1])
-        with col_odswiez:
-            if st.button("🔄 Odśwież"):
-                update_state()
-        with col_wyloguj:
-            if st.button("Wyloguj"):
-                st.session_state.rola = None
-                st.rerun()
-                
-        st.markdown("<h2 style='text-align: center; margin-top: -20px; color: #E63946;'>🔴 DO SPAKOWANIA 🔴</h2>", unsafe_allow_html=True)
-        
-        aktualne_zamowienia = load_orders()
-        
-        if not aktualne_zamowienia:
-            st.markdown("<h1 style='text-align: center; font-size: 60px; margin-top: 100px; color: #4CAF50;'>Brak zamówień. Dobra robota!</h1>", unsafe_allow_html=True)
+        zam = load_data(ZAM_FILE)
+        if not zam:
+            st.info("Brak nowych zleceń.")
         else:
-            # Tworzymy siatkę (3 zlecenia w jednym rzędzie)
             cols = st.columns(3)
-            
-            for index, z in enumerate(aktualne_zamowienia):
-                # Wybiera odpowiednią kolumnę dla zamówienia (0, 1 lub 2)
-                col = cols[index % 3] 
-                
-                with col:
+            for i, z in enumerate(zam):
+                with cols[i % 3]:
                     with st.container(border=True):
-                        # Ogromny numer zamówienia i większy tekst zawartości
-                        st.markdown(f"""
-                        <div style="text-align: center;">
-                            <div style="font-size: 70px; font-weight: 900; line-height: 1;">{z['nr']}</div>
-                            <div style="font-size: 24px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;">{z['co']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Wielki zielony przycisk (type="primary" nadaje mu kolor wiodący)
+                        st.markdown(f"<div style='text-align:center;'><h1 style='margin:0;'>{z['nr']}</h1><p style='font-size:20px;'>{z['co']}</p></div>", unsafe_allow_html=True)
                         if st.button("🟢 GOTOWE", key=z['id'], use_container_width=True, type="primary"):
-                            aktualne_zamowienia = [item for item in aktualne_zamowienia if item['id'] != z['id']]
-                            save_orders(aktualne_zamowienia)
-                            update_state()
+                            move_to_history(z['id'])
                             st.rerun()
-                    st.write("") # Dodatkowy odstęp między rzędami
+
+        st.markdown("<br><br><br>", unsafe_allow_html=True)
+        st.subheader("🕒 Ostatnio spakowane (możesz cofnąć)")
+        hist = load_data(HIST_FILE)[:5] # Pokazujemy tylko 5 ostatnich
+        
+        if hist:
+            h_cols = st.columns(len(hist))
+            for i, h in enumerate(hist):
+                with h_cols[i]:
+                    with st.container(border=True):
+                        st.write(f"**{h['nr']}**")
+                        if st.button("↩️ COFNIJ", key=f"undo_{h['id']}", use_container_width=True):
+                            restore_from_history(h['id'])
+                            st.rerun()
