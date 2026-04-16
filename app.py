@@ -185,7 +185,7 @@ else:
             #MainMenu {visibility: hidden;} 
             header {visibility: hidden;} 
             footer {visibility: hidden;} 
-            [data-testid="collapsedControl"] {display: none !important;} /* Ukrywa strzałkę paska bocznego */
+            [data-testid="collapsedControl"] {display: none !important;} 
         </style>
         """, unsafe_allow_html=True)
         
@@ -205,4 +205,40 @@ else:
             if not zam:
                 st.markdown("""
                 <div style='text-align: center; padding: 100px 0;'>
-                    <h1 style='
+                    <h1 style='font-size: 50px; color: #ccc;'>Brak aktywnych zleceń</h1>
+                    <p style='color: #888;'>Kolejka jest pusta. Oczekuj na nowe zadania.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                cols = st.columns(3)
+                for i, z in enumerate(zam):
+                    with cols[i % 3]:
+                        with st.container(border=True):
+                            st.markdown(f"""
+                            <div style='text-align:center;'>
+                                <div style='color: #666; font-size: 14px; text-transform: uppercase;'>Zlecenie Nr</div>
+                                <div style='font-size: 55px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z['nr']}</div>
+                                <hr style='margin: 10px 0; border: 1px dashed #eee;'>
+                                <div style='font-size: 20px; font-weight: bold; margin-bottom: 25px; color: #333;'>{z['co']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                move_to_history(z['id'])
+                                st.toast(f"Spakowano: {z['nr']}", icon="✔️")
+                                st.rerun()
+
+        # EKRAN HISTORII (MOŻLIWOŚĆ COFNIĘCIA)
+        with tab_hist:
+            hist = load_data(HIST_FILE)[:15] 
+            if not hist:
+                st.info("Brak historii z dzisiejszej zmiany.")
+            else:
+                for h in hist:
+                    with st.expander(f"✔️ ZAM: {h['nr']}  |  {h.get('data_pakowania', '')}"):
+                        col1, col2 = st.columns([3, 1])
+                        col1.write(f"**Zawartość:** {h['co']}")
+                        if col2.button("Cofnij zlecenia", key=f"w_undo_{h['id']}", use_container_width=True):
+                            restore_from_history(h['id'])
+                            st.toast(f"Cofnięto zamówienie {h['nr']}", icon="↩️")
+                            st.rerun()
