@@ -33,7 +33,8 @@ def move_to_history(order_id):
     
     order = next((x for x in zam if x['id'] == order_id), None)
     if order:
-        order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Zapisujemy datę i godzinę spakowania (bez sekund, dla czystszego widoku)
+        order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         hist.insert(0, order) # Nowe zlecenia trafiają na samą górę historii
         zam = [x for x in zam if x['id'] != order_id]
         save_data(ZAM_FILE, zam)
@@ -87,8 +88,8 @@ else:
     if st.session_state.rola == 'szef':
         st.title("👨‍💼 Panel Zarządzania")
         
-        # Zakładki nawigacyjne
-        t1, t2 = st.tabs(["➕ Dodaj Zamówienie", "📜 Historia i Edycja"])
+        # Zakładki nawigacyjne Szefa
+        t1, t2 = st.tabs(["➕ Dodaj Zamówienie", "📜 Historia Zamówień"])
 
         # ZAKŁADKA 1: DODAWANIE
         with t1:
@@ -97,11 +98,9 @@ else:
                 co = st.text_area("Co spakować", placeholder="np. 2x Kubek czarny, 1x Koszulka M")
                 submitted = st.form_submit_button("WYŚLIJ NA PRODUKCJĘ")
                 
-            # Logika zapisu z zabezpieczeniem przed "dwuklikiem"
             if submitted:
                 if nr and co:
                     d = load_data(ZAM_FILE)
-                    
                     if len(d) > 0 and d[-1]['nr'] == nr and d[-1]['co'] == co:
                         st.warning(f"Uwaga: Zamówienie {nr} zostało już przed sekundą wysłane!")
                     else:
@@ -111,36 +110,40 @@ else:
                 else:
                     st.error("Wypełnij oba pola!")
 
-        # ZAKŁADKA 2: HISTORIA
+        # ZAKŁADKA 2: HISTORIA SZEFA (Z EXPANDERAMI)
         with t2:
             st.subheader("Wszystkie spakowane zamówienia")
             hist = load_data(HIST_FILE)
             
             if not hist:
-                st.info("Historia jest pusta.")
+                st.info("Historia jest pusta. Żadne zamówienie nie zostało jeszcze spakowane.")
             else:
-                # Interaktywna i edytowalna tabela dla szefa
-                edited_hist = st.data_editor(hist, num_rows="dynamic", key="editor", use_container_width=True)
-                if st.button("ZAPISZ ZMIANY W TABELI"):
-                    save_data(HIST_FILE, edited_hist)
-                    st.success("Zmiany zapisane!")
+                # Estetyczna lista rozwijana dla każdego zamówienia
+                for h in hist:
+                    data_spak = h.get('data_pakowania', 'Brak daty')
+                    with st.expander(f"📦 ZAM: {h['nr']}  |  🕒 Spakowano: {data_spak}"):
+                        st.markdown(f"**Co zostało spakowane:**<br>{h['co']}", unsafe_allow_html=True)
+                        st.write("") # Odstęp
+                        if st.button("🔄 PRZYWRÓĆ NA PRODUKCJĘ", key=f"boss_res_{h['id']}", type="primary"):
+                            restore_from_history(h['id'])
+                            st.success(f"Zamówienie {h['nr']} wróciło do pakowni!")
+                            st.rerun()
                 
-                st.divider()
-                st.write("Wymuś przywrócenie zamówienia na produkcję:")
-                to_restore = st.selectbox("Wybierz zamówienie z historii", 
-                                          options=[x['id'] for x in hist],
-                                          format_func=lambda x: next(i['nr'] for i in hist if i['id'] == x))
-                if st.button("PRZYWRÓĆ WYBRANE"):
-                    restore_from_history(to_restore)
-                    st.success("Zamówienie wróciło do pakowni!")
-                    st.rerun()
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                
+                # Opcja edycji tekstu schowana w osobnym akordeonie na samym dole
+                with st.expander("⚙️ Zaawansowana edycja bazy danych (Tabela)"):
+                    st.write("Tutaj możesz poprawić błędy tekstowe w archiwalnych zamówieniach:")
+                    edited_hist = st.data_editor(hist, num_rows="dynamic", key="editor", use_container_width=True)
+                    if st.button("ZAPISZ ZMIANY W TABELI"):
+                        save_data(HIST_FILE, edited_hist)
+                        st.success("Zmiany w historii zostały zapisane!")
 
     # ==========================================
     #           PANEL PRACOWNIKA (KDS)
     # ==========================================
     elif st.session_state.rola == 'pracownik':
         
-        # CSS ukrywający zbędne paski i ulepszający układ (Ekran Kioskowy)
         st.markdown("""
         <style>
             #MainMenu {visibility: hidden;} 
@@ -151,43 +154,49 @@ else:
         """, unsafe_allow_html=True)
         
         # Pasek nawigacji górnej
-        col_tytul, col_odswiez = st.columns([8, 1])
-        col_tytul.markdown("<h1 style='color: #E63946; margin-top: -20px;'>🔴 DO SPAKOWANIA</h1>", unsafe_allow_html=True)
-        if col_odswiez.button("🔄 Odśwież", use_container_width=True): 
+        col_odswiez, col_puste = st.columns([1, 9])
+        if col_odswiez.button("🔄 Odśwież ekran", use_container_width=True): 
             st.rerun()
 
-        zam = load_data(ZAM_FILE)
-        
-        # AKTYWNE ZAMÓWIENIA NA EKRANIE
-        if not zam:
-            st.markdown("<h1 style='text-align: center; font-size: 60px; margin-top: 100px; color: #4CAF50;'>Brak zamówień. Dobra robota!</h1>", unsafe_allow_html=True)
-        else:
-            cols = st.columns(3) # Siatka po 3 kafelki
-            for i, z in enumerate(zam):
-                with cols[i % 3]:
-                    with st.container(border=True):
-                        st.markdown(f"""
-                        <div style='text-align:center;'>
-                            <div style='font-size: 65px; font-weight: 900; line-height: 1.1;'>{z['nr']}</div>
-                            <div style='font-size: 24px; font-weight: bold; margin-top: 10px; margin-bottom: 25px;'>{z['co']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        if st.button("🟢 GOTOWE", key=z['id'], use_container_width=True, type="primary"):
-                            move_to_history(z['id'])
-                            st.rerun()
+        # Zakładki nawigacyjne Pracownika
+        tab_kds, tab_hist = st.tabs(["🔴 EKRAN PAKOWNI", "🕒 HISTORIA ZAMÓWIEŃ"])
 
-        st.markdown("<br><br><br>", unsafe_allow_html=True)
-        
-        # OSTATNIO SPAKOWANE (OPCJA COFNIĘCIA)
-        st.subheader("🕒 Ostatnio spakowane (możesz cofnąć)")
-        hist = load_data(HIST_FILE)[:5] # Ładuje tylko 5 ostatnich z historii
-        
-        if hist:
-            h_cols = st.columns(len(hist))
-            for i, h in enumerate(hist):
-                with h_cols[i]:
-                    with st.container(border=True):
-                        st.write(f"**{h['nr']}**")
-                        if st.button("↩️ COFNIJ", key=f"undo_{h['id']}", use_container_width=True):
+        # ZAKŁADKA 1: EKRAN GŁÓWNY (KDS)
+        with tab_kds:
+            zam = load_data(ZAM_FILE)
+            
+            if not zam:
+                st.markdown("<h1 style='text-align: center; font-size: 60px; margin-top: 80px; color: #4CAF50;'>Brak zamówień. Dobra robota!</h1>", unsafe_allow_html=True)
+            else:
+                cols = st.columns(3) # Siatka po 3 kafelki
+                for i, z in enumerate(zam):
+                    with cols[i % 3]:
+                        with st.container(border=True):
+                            st.markdown(f"""
+                            <div style='text-align:center;'>
+                                <div style='font-size: 65px; font-weight: 900; line-height: 1.1;'>{z['nr']}</div>
+                                <div style='font-size: 24px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;'>{z['co']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            if st.button("🟢 GOTOWE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                move_to_history(z['id'])
+                                st.rerun()
+
+        # ZAKŁADKA 2: HISTORIA PRACOWNIKA (Z EXPANDERAMI)
+        with tab_hist:
+            st.subheader("Ostatnio spakowane paczki")
+            hist = load_data(HIST_FILE)[:15] # Ładuje tylko 15 ostatnich z historii dla pracownika
+            
+            if not hist:
+                st.info("Lista spakowanych zamówień jest pusta.")
+            else:
+                for h in hist:
+                    data_spak = h.get('data_pakowania', 'Brak daty')
+                    # Tytuł expandera widoczny od razu
+                    with st.expander(f"✅ ZAM: {h['nr']}  |  🕒 Spakowano: {data_spak}"):
+                        st.markdown(f"<span style='font-size: 18px;'>**Zawartość paczki:** {h['co']}</span>", unsafe_allow_html=True)
+                        st.write("") # Odstęp
+                        # Przycisk "Cofnij" widoczny dopiero po rozwinięciu
+                        if st.button("↩️ COFNIJ NA EKRAN PAKOWNI", key=f"worker_undo_{h['id']}", type="secondary"):
                             restore_from_history(h['id'])
                             st.rerun()
