@@ -54,12 +54,16 @@ HIST_FILE = "Historia"
 DYSPOZYCJE_FILE = "Dyspozycje"
 ZWROTY_FILE = "Zwroty"
 
+LABELS_DIR = "etykiety" 
+if not os.path.exists(LABELS_DIR):
+    os.makedirs(LABELS_DIR)
+
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# Definicja nagłówków
+# Definicja nagłówków dla każdej karty (zapobiega błędowi przy pustych danych)
 SHEET_HEADERS = {
-    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "pdf_0", "pdf_1", "pdf_2", "pdf_3", "pdf_4"],
+    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete"],
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
     "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"]
@@ -69,16 +73,18 @@ def load_data(sheet_name):
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
-        df = df.fillna("") # Zapobiega błędom 'NaN' z pustych komórek
         return df.to_dict(orient="records")
     except Exception:
         return []
 
 def save_data(sheet_name, data):
+    # Jeśli lista jest pusta, tworzymy DataFrame z samymi nagłówkami
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
+    
+    # Próba zapisu z obsługą błędów
     try:
         conn.update(worksheet=sheet_name, data=df)
     except Exception as e:
@@ -89,16 +95,9 @@ def move_to_history(order_id):
     hist = load_data(HIST_FILE)
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
-        # Kopiujemy do historii tylko czyste dane, bez gigantycznych kawałków PDF
-        hist_order = {
-            "id": order.get('id', ''),
-            "nr": order.get('nr', ''),
-            "co": order.get('co', ''),
-            "termin": order.get('termin', ''),
-            "ma_etykiete": order.get('ma_etykiete', ''),
-            "data_pakowania": datetime.now().strftime("%Y-%m-%d %H:%M")
-        }
-        hist.insert(0, hist_order)
+        order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Dodajemy nagłówek jeśli go nie ma
+        hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
@@ -108,15 +107,8 @@ def restore_from_history(order_id):
     hist = load_data(HIST_FILE)
     order = next((x for x in hist if str(x.get('id')) == str(order_id)), None)
     if order:
-        # Przywracamy, ale odznaczamy etykietę (bo usunęliśmy ją przy pakowaniu)
-        restored_order = {
-            "id": order.get('id', ''),
-            "nr": order.get('nr', ''),
-            "co": order.get('co', ''),
-            "termin": order.get('termin', ''),
-            "ma_etykiete": "False"
-        }
-        zam.append(restored_order)
+        if 'data_pakowania' in order: del order['data_pakowania']
+        zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
@@ -159,6 +151,7 @@ else:
     # ==========================================
     if st.session_state.rola == 'szef':
         
+        # --- ZMIANA 1: NAPRAWA WYLOGOWANIA SZEFA ---
         c1, c2, c3 = st.columns([6, 2, 2])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -177,7 +170,7 @@ else:
         
         do_spakowania_dzisiaj = sum(1 for z in zam_data if str(z.get('termin', '9999-12-31')) <= dzisiaj_str)
         spakowane_dzisiaj = sum(1 for h in hist_data if str(h.get('data_pakowania', '')).startswith(dzisiaj_str))
-        oczekujace_zwroty = sum(1 for z in zwroty_data if str(z.get('status')) == 'Nowy')
+        oczekujace_zwroty = sum(1 for z in zwroty_data if z.get('status') == 'Nowy')
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(label="Wszystkie w kolejce", value=len(zam_data))
@@ -199,7 +192,7 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     co = st.text_area("Specyfikacja (co spakować)")
-                    plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
+                    plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (opcjonalnie)", type=["pdf"])
                     
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
@@ -207,35 +200,19 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
+                                has_label = "False"
                                 
-                                order_dict = {
-                                    "id": new_id, 
-                                    "nr": nr, 
-                                    "co": co, 
-                                    "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": "False"
-                                }
-                                
-                                # CIĘCIE ETYKIETY W LOCIE (Max ~180KB PDF)
                                 if plik_etykiety is not None:
-                                    try:
-                                        pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
-                                        chunk_size = 45000
-                                        chunks = [pdf_b64[i:i+chunk_size] for i in range(0, len(pdf_b64), chunk_size)]
-                                        
-                                        if len(chunks) > 5:
-                                            st.error("Plik PDF jest za duży! (Zmieści się max 180KB). Spróbuj skompresować plik.")
-                                            st.stop()
-                                            
-                                        for idx, chunk in enumerate(chunks):
-                                            order_dict[f"pdf_{idx}"] = chunk
-                                            
-                                        order_dict["ma_etykiete"] = "True"
-                                    except Exception as e:
-                                        st.error(f"Błąd przetwarzania pliku: {e}")
-                                        st.stop()
+                                    sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
+                                    with open(sciezka_pdf, "wb") as f:
+                                        f.write(plik_etykiety.getbuffer())
+                                    has_label = "True"
 
-                                zam_data.append(order_dict)
+                                zam_data.append({
+                                    "id": new_id, "nr": nr, "co": co, 
+                                    "termin": termin.strftime("%Y-%m-%d"),
+                                    "ma_etykiete": has_label
+                                })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
@@ -252,13 +229,19 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if str(z.get('ma_etykiete', '')).lower() == 'true': 
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        
+                        # ZMIANA 2: Sprawdzamy fizycznie czy plik na serwerze istnieje
+                        sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
+                        if os.path.exists(sciezka_pdf):
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Wgrano etykietę PDF</span>"
+                        
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
+                            if os.path.exists(sciezka_pdf):
+                                os.remove(sciezka_pdf)
                             st.rerun()
 
         with t3:
@@ -394,28 +377,17 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- SKLEJANIE ETYKIETY Z KOLUMN ---
-                            if str(z.get('ma_etykiete', '')).lower() == 'true':
-                                pelny_b64 = ""
-                                for idx in range(5):
-                                    klucz = f"pdf_{idx}"
-                                    if klucz in z and z[klucz]:
-                                        pelny_b64 += str(z[klucz])
-                                
-                                if pelny_b64:
-                                    try:
-                                        pdf_bytes = base64.b64decode(pelny_b64)
-                                        st.download_button(
-                                            label="🖨️ OTWÓRZ ETYKIETĘ",
-                                            data=pdf_bytes,
-                                            file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                            mime="application/pdf",
-                                            use_container_width=True
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Błąd odczytu pliku PDF: {e}")
-                                else:
-                                    st.warning("Nie udało się pobrać etykiety z bazy.")
+                            # --- ZMIANA 2: NIEZAWODNE WYŚWIETLANIE ETYKIET ---
+                            sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
+                            if os.path.exists(sciezka_pdf):
+                                with open(sciezka_pdf, "rb") as file:
+                                    st.download_button(
+                                        label="🖨️ OTWÓRZ ETYKIETĘ",
+                                        data=file,
+                                        file_name=f"Etykieta_{z.get('nr')}.pdf",
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
