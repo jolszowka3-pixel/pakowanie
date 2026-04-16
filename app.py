@@ -61,17 +61,34 @@ if not os.path.exists(LABELS_DIR):
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
+# Definicja nagłówków dla każdej karty (zapobiega błędowi przy pustych danych)
+SHEET_HEADERS = {
+    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete"],
+    "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
+    "Dyspozycje": ["id", "tresc", "data_dodania"],
+    "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"]
+}
+
 def load_data(sheet_name):
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
         return df.to_dict(orient="records")
-    except Exception as e:
+    except Exception:
         return []
 
 def save_data(sheet_name, data):
-    df = pd.DataFrame(data)
-    conn.update(worksheet=sheet_name, data=df)
+    # Jeśli lista jest pusta, tworzymy DataFrame z samymi nagłówkami
+    if not data:
+        df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
+    else:
+        df = pd.DataFrame(data)
+    
+    # Próba zapisu z obsługą błędów
+    try:
+        conn.update(worksheet=sheet_name, data=df)
+    except Exception as e:
+        st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -79,6 +96,7 @@ def move_to_history(order_id):
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Dodajemy nagłówek jeśli go nie ma
         hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
@@ -265,8 +283,8 @@ else:
                                 
         with t5:
             st.markdown("#### Obsługa Zwrotów i Reklamacji (RMA)")
-            nowe_zwroty = [z for z in zwroty_data if z.get('status') == 'Nowy']
-            stare_zwroty = [z for z in zwroty_data if z.get('status') == 'Rozpatrzony']
+            nowe_zwroty = [z for z in zwroty_data if str(z.get('status')) == 'Nowy']
+            stare_zwroty = [z for z in zwroty_data if str(z.get('status')) == 'Rozpatrzony']
             
             st.markdown("##### 🔴 Oczekujące na Twoją decyzję")
             if not nowe_zwroty:
@@ -281,7 +299,7 @@ else:
                         with col2:
                             if st.button("Rozpatrzono", key=f"zwr_{z['id']}", use_container_width=True, type="primary"):
                                 for item in zwroty_data:
-                                    if item['id'] == z['id']:
+                                    if str(item['id']) == str(z['id']):
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                                 save_data(ZWROTY_FILE, zwroty_data)
@@ -349,12 +367,11 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # PANCERNY PRZYCISK POBIERANIA PDF
                             if str(z.get('ma_etykiete')).lower() == 'true':
                                 sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
                                 if os.path.exists(sciezka_pdf):
                                     with open(sciezka_pdf, "rb") as file:
-                                        btn = st.download_button(
+                                        st.download_button(
                                             label="🖨️ OTWÓRZ ETYKIETĘ",
                                             data=file,
                                             file_name=f"Etykieta_{z.get('nr')}.pdf",
@@ -362,7 +379,7 @@ else:
                                             use_container_width=True
                                         )
                             
-                            st.write("") # Odstęp
+                            st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
                                 st.rerun()
