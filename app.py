@@ -54,26 +54,29 @@ st.markdown("""
         font-weight: 500 !important;
         padding: 0.6rem 1.5rem !important;
         width: 100% !important;
+        transition: 0.2s;
     }
+    button[kind="primary"]:hover { background-color: #334155 !important; }
 
-    /* Przycisk Drukowania */
+    /* Przycisk Drukowania - Naprawiony */
     .print-btn {
         display: block;
+        width: 100%;
         text-align: center;
-        padding: 10px;
+        padding: 10px 0;
         background-color: #ffffff;
         color: #1e293b;
         border: 2px solid #1e293b;
         border-radius: 8px;
         font-weight: 600;
-        text-decoration: none;
+        cursor: pointer;
         margin-bottom: 12px;
         transition: all 0.2s;
     }
     .print-btn:hover { background-color: #1e293b; color: #ffffff; }
 
     div[data-testid="stMetricValue"] { color: #1e293b !important; font-weight: 700 !important; }
-    h1, h2, h3 { color: #0f172a !important; font-weight: 700 !important; letter-spacing: -0.5px !important; }
+    h1, h2, h3 { color: #0f172a !important; font-weight: 700 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -99,31 +102,25 @@ SHEET_HEADERS = {
 
 def load_data(sheet_name, force_refresh=False):
     try:
-        # TTL ustawione na 1 minutę - bezpieczne dla limitów, szybkie dla pracowników
         ttl_value = 0 if force_refresh else "1m"
         df = conn.read(worksheet=sheet_name, ttl=ttl_value)
-        df = df.dropna(how='all') 
-        df = df.fillna("") 
+        df = df.dropna(how='all').fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
 def save_data(sheet_name, data):
-    if not data:
-        df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
-    else:
-        df = pd.DataFrame(data)
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     try:
         conn.update(worksheet=sheet_name, data=df)
-        st.cache_data.clear() # Wymusza odświeżenie przy następnym odczycie
+        st.cache_data.clear() 
     except Exception as e:
         st.error(f"Blad zapisu: {e}")
 
 def usun_etykiete(order_id):
     etyk_data = load_data(ETYKIETY_FILE)
     nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
-    if len(nowe_etyk) != len(etyk_data):
-        save_data(ETYKIETY_FILE, nowe_etyk)
+    if len(nowe_etyk) != len(etyk_data): save_data(ETYKIETY_FILE, nowe_etyk)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -135,25 +132,18 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
-        usun_etykiete(order_id)
+        if str(order.get('ma_etykiete', '')).lower() in ['true', '1', 'prawda']: usun_etykiete(order_id)
 
 def restore_from_history(order_id):
-    zam = load_data(ZAM_FILE)
-    hist = load_data(HIST_FILE)
+    zam, hist = load_data(ZAM_FILE), load_data(HIST_FILE)
     order = next((x for x in hist if str(x.get('id')) == str(order_id)), None)
     if order:
-        if 'data_pakowania' in order: del order['data_pakowania']
-        order['ma_etykiete'] = "False" 
+        order['ma_etykiete'] = "False"
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
-
-def move_dyspozycja_to_history(dysp_id):
-    dyspo = load_data(DYSPOZYCJE_FILE)
-    dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
-    save_data(DYSPOZYCJE_FILE, dyspo)
 
 # --- 4. LOGOWANIE ---
 if 'rola' not in st.session_state: st.session_state.rola = None
@@ -173,158 +163,106 @@ if st.session_state.rola is None:
 
 # --- 5. SYSTEM PO ZALOGOWANIU ---
 else:
-    # --- PANEL ADMINISTRATORA ---
     if st.session_state.rola == 'szef':
         c1, c2, c3 = st.columns([6, 2, 2])
         c1.markdown("<h1 style='margin-top: -10px;'>PANEL ADMINISTRACYJNY</h1>", unsafe_allow_html=True)
         if c3.button("Wyloguj sie", use_container_width=True):
-            st.session_state.rola = None
-            st.cache_data.clear()
-            st.rerun()
+            st.session_state.rola = None; st.cache_data.clear(); st.rerun()
         st.divider()
 
-        zam_data = load_data(ZAM_FILE)
-        hist_data = load_data(HIST_FILE)
-        dyspo_data = load_data(DYSPOZYCJE_FILE)
-        zwroty_data = load_data(ZWROTY_FILE)
+        zam_data, hist_data, dyspo_data, zwroty_data = load_data(ZAM_FILE), load_data(HIST_FILE), load_data(DYSPOZYCJE_FILE), load_data(ZWROTY_FILE)
         etykiety_baza = load_data(ETYKIETY_FILE)
-        
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Wszystkie zamowienia", len(zam_data))
-        m2.metric("Termin dzisiejszy", sum(1 for z in zam_data if str(z.get('termin')) <= dzisiaj_str))
-        m3.metric("Spakowane dzisiaj", sum(1 for h in hist_data if str(h.get('data_pakowania', '')).startswith(dzisiaj_str)))
+        m1.metric("W kolejce", len(zam_data))
+        m2.metric("Na dzis", sum(1 for z in zam_data if str(z.get('termin')) <= dzisiaj_str))
+        m3.metric("Spakowane dzis", sum(1 for h in hist_data if str(h.get('data_pakowania', '')).startswith(dzisiaj_str)))
         m4.metric("Nowe zwroty", sum(1 for z in zwroty_data if str(z.get('status')) == 'Nowy'))
         
         st.write("<br>", unsafe_allow_html=True)
         t1, t2, t3, t4, t5 = st.tabs(["Nowe Zlecenie", "Aktywne", "Historia", "Zadania", "Zwroty"])
 
         with t1:
-            col_f, col_s = st.columns([2, 1])
-            with col_f:
-                with st.form("add_form", clear_on_submit=True):
-                    nr = st.text_input("Numer zamowienia")
-                    termin = st.date_input("Termin realizacji", value=date.today())
-                    co = st.text_area("Specyfikacja")
-                    plik = st.file_uploader("Etykieta PDF", type=["pdf"])
-                    if st.form_submit_button("PRZEKAZ DO REALIZACJI", type="primary"):
-                        if nr and co:
-                            new_id = str(uuid.uuid4())
-                            if plik:
-                                pdf_b64 = base64.b64encode(plik.read()).decode('utf-8')
-                                chunk_size = 45000 
-                                for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
-                                    etykiety_baza.append({"zam_id": new_id, "czesc": idx, "dane": pdf_b64[i:i+chunk_size]})
-                                save_data(ETYKIETY_FILE, etykiety_baza)
-                            zam_data.append({"id": new_id, "nr": nr, "co": co, "termin": termin.strftime("%Y-%m-%d"), "ma_etykiete": "True" if plik else "False"})
-                            save_data(ZAM_FILE, zam_data)
-                            st.rerun()
+            with st.form("add_form", clear_on_submit=True):
+                nr = st.text_input("Numer zamowienia")
+                termin = st.date_input("Termin", value=date.today())
+                co = st.text_area("Specyfikacja")
+                plik = st.file_uploader("PDF", type=["pdf"])
+                if st.form_submit_button("PRZEKAZ", type="primary") and nr and co:
+                    new_id = str(uuid.uuid4())
+                    if plik:
+                        pdf_b64 = base64.b64encode(plik.read()).decode('utf-8')
+                        chunk_size = 45000 
+                        for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
+                            etykiety_baza.append({"zam_id": new_id, "czesc": idx, "dane": pdf_b64[i:i+chunk_size]})
+                        save_data(ETYKIETY_FILE, etykiety_baza)
+                    zam_data.append({"id": new_id, "nr": nr, "co": co, "termin": termin.strftime("%Y-%m-%d"), "ma_etykiete": "True" if plik else "False"})
+                    save_data(ZAM_FILE, zam_data); st.rerun()
 
         with t2:
-            if not zam_data: st.info("Brak aktywnych zlecen.")
             for z in zam_data:
-                with st.expander(f"Zamowienie: {z['nr']} | Termin: {z['termin']}"):
-                    col_i, col_a = st.columns([4, 1])
-                    col_i.write(f"**Zawartosc:**\n{z['co']}")
-                    if col_a.button("Usun", key=f"del_{z['id']}", use_container_width=True):
-                        zam_data = [x for x in zam_data if x['id'] != z['id']]
-                        save_data(ZAM_FILE, zam_data)
-                        usun_etykiete(z['id'])
-                        st.rerun()
+                with st.expander(f"Zam: {z['nr']} | {z['termin']}"):
+                    if st.button("Usun", key=f"d_{z['id']}"):
+                        save_data(ZAM_FILE, [x for x in zam_data if x['id'] != z['id']]); usun_etykiete(z['id']); st.rerun()
 
         with t3: st.data_editor(hist_data, use_container_width=True)
-        with t4:
-            c_d1, c_d2 = st.columns([1, 1])
-            with c_d1:
-                with st.form("d_form", clear_on_submit=True):
-                    tresc = st.text_area("Tresc zadania")
-                    if st.form_submit_button("DODAJ ZADANIE", type="primary"):
-                        dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc, "data_dodania": datetime.now().strftime("%H:%M")})
-                        save_data(DYSPOZYCJE_FILE, dyspo_data)
-                        st.rerun()
-            with c_d2:
-                for d in dyspo_data:
-                    with st.container(border=True):
-                        st.write(f"**Godzina:** {d['data_dodania']}\n\n{d['tresc']}")
-                        if st.button("Usun zadanie", key=f"dd_{d['id']}"):
-                            dyspo_data = [x for x in dyspo_data if x['id'] != d['id']]; save_data(DYSPOZYCJE_FILE, dyspo_data); st.rerun()
 
         with t5:
             for z in [x for x in zwroty_data if x['status'] == 'Nowy']:
                 with st.container(border=True):
-                    cz1, cz2 = st.columns([4, 1])
-                    cz1.write(f"**Numer:** {z['nr']} | **Stan:** {z['stan']} | **Powod:** {z['powod']}")
-                    if cz2.button("Zatwierdz", key=f"rz_{z['id']}", type="primary"):
+                    if st.button(f"Zalatwione: {z['nr']}", key=f"rz_{z['id']}", type="primary"):
                         for item in zwroty_data:
                             if item['id'] == z['id']: item['status'] = 'Rozpatrzony'
                         save_data(ZWROTY_FILE, zwroty_data); st.rerun()
 
-    # --- TERMINAL PRACOWNIKA ---
     elif st.session_state.rola == 'pracownik':
         c1, c2, c3 = st.columns([6, 2, 2])
-        c1.markdown("<h1 style='margin-top: -10px;'>TERMINAL KOMPLETACJI</h1>", unsafe_allow_html=True)
-        
-        # Przycisk wymuszający odświeżenie i czyszczenie CACHE
-        if c2.button("Odswiez dane", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-            
-        if c3.button("Wyloguj", use_container_width=True):
-            st.session_state.rola = None
-            st.cache_data.clear()
-            st.rerun()
+        c1.markdown("<h1 style='margin-top: -10px;'>KOMPLETACJA</h1>", unsafe_allow_html=True)
+        if c2.button("Odswiez", use_container_width=True): st.cache_data.clear(); st.rerun()
+        if c3.button("Wyloguj", use_container_width=True): st.session_state.rola = None; st.rerun()
         st.divider()
 
-        # Ładowanie danych z wymuszonym odświeżeniem po kliknięciu przycisku
         zam_prac = load_data(ZAM_FILE)
-        dyspo_prac = load_data(DYSPOZYCJE_FILE)
-        zwroty_prac = load_data(ZWROTY_FILE)
         etyk_prac = load_data(ETYKIETY_FILE)
 
-        tab_z, tab_d, tab_zw = st.tabs(["Kolejka Zlecen", "Zadania Dodatkowe", "Zwroty"])
-
-        with tab_z:
-            if not zam_prac:
-                st.write("<div style='text-align: center; padding: 100px; color: #94a3b8;'>Brak aktywnych zlecen</div>", unsafe_allow_html=True)
-            else:
-                cols = st.columns(3)
-                for i, z in enumerate(zam_prac):
-                    with cols[i % 3]:
-                        with st.container(border=True):
-                            st.markdown(f"<p style='color: #64748b; font-size: 0.8rem; margin-bottom: 0;'>ZLECENIE</p>", unsafe_allow_html=True)
-                            st.markdown(f"<h2 style='margin-top: 0; margin-bottom: 15px;'>{z['nr']}</h2>", unsafe_allow_html=True)
-                            st.write(f"**Specyfikacja:**\n{z['co']}")
-                            st.write(f"**Termin:** {z['termin']}")
-                            st.write("<br>", unsafe_allow_html=True)
+        if not zam_prac:
+            st.write("<div style='text-align: center; padding: 100px; color: #94a3b8;'>Brak aktywnych zlecen</div>", unsafe_allow_html=True)
+        else:
+            cols = st.columns(3)
+            for i, z in enumerate(zam_prac):
+                with cols[i % 3]:
+                    with st.container(border=True):
+                        st.markdown(f"<p style='color: #64748b; font-size: 0.8rem; margin-bottom: 0;'>ZLECENIE</p>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='margin-top: 0; margin-bottom: 15px;'>{z['nr']}</h2>", unsafe_allow_html=True)
+                        st.write(f"**Spec:** {z['co']}\n\n**Termin:** {z['termin']}")
+                        st.write("<br>", unsafe_allow_html=True)
+                        
+                        # --- NAPRAWIONY PRZYCISK DRUKOWANIA (BLOB METHOD) ---
+                        kawalki = [e for e in etyk_prac if str(e.get('zam_id')) == str(z['id'])]
+                        if kawalki:
+                            kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                            pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
                             
-                            # --- PRZYCISK DRUKOWANIA ---
-                            kawalki = [e for e in etyk_prac if str(e.get('zam_id')) == str(z['id'])]
-                            if kawalki:
-                                kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
-                                pdf_data = "".join([e.get('dane', '') for e in kawalki])
-                                btn_html = f'<a href="data:application/pdf;base64,{pdf_data}" target="_blank" class="print-btn">DRUKUJ ETYKIETE</a>'
-                                st.markdown(btn_html, unsafe_allow_html=True)
-                            
-                            if st.button("ZAKONCZ PRACE", key=f"f_{z['id']}", type="primary"):
-                                move_to_history(z['id'])
-                                st.rerun()
-
-        with tab_d:
-            if not dyspo_prac: st.info("Brak zadan dodatkowych.")
-            for d in dyspo_prac:
-                with st.container(border=True):
-                    st.write(f"**Polecenie:** {d['tresc']}")
-                    if st.button("Potwierdz wykonanie", key=f"cp_{d['id']}", type="primary"):
-                        move_dyspozycja_to_history(d['id']); st.rerun()
-
-        with tab_zw:
-            with st.form("z_form", clear_on_submit=True):
-                st.markdown("### Rejestracja zwrotu")
-                nr_z = st.text_input("Numer zamowienia")
-                stan = st.selectbox("Stan", ["Pelen", "Uszkodzony"])
-                powod = st.text_input("Przyczyna")
-                if st.form_submit_button("ZGLOS ZWROT", type="primary"):
-                    if nr_z:
-                        zwroty_prac.insert(0, {"id": str(uuid.uuid4()), "nr": nr_z, "stan": stan, "powod": powod, "status": "Nowy", "data": datetime.now().strftime("%Y-%m-%d")})
-                        save_data(ZWROTY_FILE, zwroty_prac); st.success("Zgloszono pomyslnie.")
+                            btn_id = f"btn_{z['id'].replace('-', '')}"
+                            html_blob = f"""
+                            <button id="{btn_id}" class="print-btn">DRUKUJ ETYKIETE</button>
+                            <script>
+                            document.getElementById("{btn_id}").onclick = function() {{
+                                const b64 = "{pdf_b64}";
+                                const byteCharacters = atob(b64);
+                                const byteNumbers = new Array(byteCharacters.length);
+                                for (let i = 0; i < byteCharacters.length; i++) {{
+                                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                }}
+                                const byteArray = new Uint8Array(byteNumbers);
+                                const blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                                const blobUrl = URL.createObjectURL(blob);
+                                window.open(blobUrl, '_blank');
+                            }};
+                            </script>
+                            """
+                            components.html(html_blob, height=60)
+                        
+                        if st.button("ZAKONCZ", key=f"f_{z['id']}", type="primary"):
+                            move_to_history(z['id']); st.rerun()
