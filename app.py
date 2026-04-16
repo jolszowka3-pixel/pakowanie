@@ -160,10 +160,8 @@ else:
         m4.metric(label="Aktywne Dyspozycje", value=len(dyspo_data))
         st.divider()
         
-        # --- ZAKŁADKI SZEFA (teraz 4 zakładki) ---
         t1, t2, t3, t4 = st.tabs(["➕ Nowe Zlecenie", "📦 Aktywne na Produkcji", "🗄️ Baza Historyczna", "📝 Dyspozycje i Zadania"])
 
-        # --- ZAKŁADKA 1: DODAWANIE ZAMÓWIEŃ ---
         with t1:
             col_form, col_pusty = st.columns([2, 1])
             with col_form:
@@ -191,7 +189,6 @@ else:
                         else:
                             st.toast("Wypełnij wszystkie pola formularza.", icon="❗️")
 
-        # --- ZAKŁADKA 2: AKTYWNE NA PRODUKCJI (NOWA) ---
         with t2:
             st.markdown("#### Zlecenia w trakcie realizacji przez pakownię")
             if not zam_data:
@@ -207,7 +204,6 @@ else:
                             st.toast(f"Zlecenie {z['nr']} wycofane z produkcji.", icon="🗑️")
                             st.rerun()
 
-        # --- ZAKŁADKA 3: HISTORIA ---
         with t3:
             st.markdown("#### Dziennik operacji (Zamówienia)")
             if not hist_data:
@@ -229,7 +225,6 @@ else:
                         save_data(HIST_FILE, edited_hist)
                         st.toast("Zaktualizowano.", icon="💾")
 
-        # --- ZAKŁADKA 4: DYSPOZYCJE ---
         with t4:
             col_d1, col_d2 = st.columns([1, 1])
             
@@ -269,6 +264,37 @@ else:
     # ==========================================
     elif st.session_state.rola == 'pracownik':
         
+        # Pobieramy dane
+        zam_pracownik = load_data(ZAM_FILE)
+        dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
+        
+        # --- LOGIKA WYKRYWANIA NOWYCH ZADAŃ (DŹWIĘK) ---
+        if 'znane_zam' not in st.session_state:
+            st.session_state.znane_zam = {z['id'] for z in zam_pracownik}
+        if 'znane_dysp' not in st.session_state:
+            st.session_state.znane_dysp = {d['id'] for d in dyspo_pracownik}
+
+        aktualne_zam_ids = {z['id'] for z in zam_pracownik}
+        aktualne_dysp_ids = {d['id'] for d in dyspo_pracownik}
+
+        # Sprawdzamy czy pojawiło się nowe ID (Różnica zbiorów)
+        nowe_zam = aktualne_zam_ids - st.session_state.znane_zam
+        nowe_dysp = aktualne_dysp_ids - st.session_state.znane_dysp
+
+        # Aktualizujemy pamięć
+        st.session_state.znane_zam = aktualne_zam_ids
+        st.session_state.znane_dysp = aktualne_dysp_ids
+
+        # Jeśli wykryto nowość - zagraj dźwięk powiadomienia!
+        if nowe_zam or nowe_dysp:
+            st.markdown("""
+            <audio autoplay>
+                <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+            </audio>
+            """, unsafe_allow_html=True)
+            st.toast("🔔 Nowe zadanie na terminalu!", icon="🔔")
+
+        # Nawigacja pracownika
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
         if c2.button("🔄 Odśwież", use_container_width=True): st.rerun()
@@ -276,14 +302,13 @@ else:
             st.session_state.rola = None
             st.rerun()
 
-        # Zakładki u pracownika
+        # Zakładki
         tab_kds, tab_dyspo, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "🕒 OSTATNIE OPERACJE"])
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         # --- ZAKŁADKA 1: PAKOWNIA (ZAMÓWIENIA) ---
         with tab_kds:
-            zam = load_data(ZAM_FILE)
-            if not zam:
+            if not zam_pracownik:
                 st.markdown("""
                 <div style='text-align: center; padding: 100px 0;'>
                     <h1 style='font-size: 40px; color: #94a3b8;'>Brak aktywnych zleceń</h1>
@@ -292,7 +317,7 @@ else:
                 """, unsafe_allow_html=True)
             else:
                 cols = st.columns(3)
-                for i, z in enumerate(zam):
+                for i, z in enumerate(zam_pracownik):
                     with cols[i % 3]:
                         with st.container(border=True):
                             termin_zlecenia = z.get('termin', '9999-12-31')
@@ -320,8 +345,7 @@ else:
 
         # --- ZAKŁADKA 2: DYSPOZYCJE (ZADANIA) ---
         with tab_dyspo:
-            dyspo = load_data(DYSPOZYCJE_FILE)
-            if not dyspo:
+            if not dyspo_pracownik:
                 st.markdown("""
                 <div style='text-align: center; padding: 80px 0;'>
                     <h1 style='font-size: 35px; color: #94a3b8;'>Brak dodatkowych zadań</h1>
@@ -330,7 +354,7 @@ else:
                 """, unsafe_allow_html=True)
             else:
                 d_cols = st.columns(3)
-                for i, d in enumerate(dyspo):
+                for i, d in enumerate(dyspo_pracownik):
                     with d_cols[i % 3]:
                         with st.container(border=True):
                             st.markdown(f"""
