@@ -56,6 +56,7 @@ ZAM_FILE = "zamowienia.json"
 HIST_FILE = "historia.json"
 DYSPOZYCJE_FILE = "dyspozycje.json"
 HIST_DYSPOZYCJI_FILE = "historia_dyspozycji.json"
+ZWROTY_FILE = "zwroty.json" # Nowy plik bazy zwrotów
 LABELS_DIR = "etykiety" 
 
 if not os.path.exists(LABELS_DIR):
@@ -150,21 +151,28 @@ else:
         zam_data = load_data(ZAM_FILE)
         hist_data = load_data(HIST_FILE)
         dyspo_data = load_data(DYSPOZYCJE_FILE)
+        zwroty_data = load_data(ZWROTY_FILE)
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
         
         do_spakowania_dzisiaj = sum(1 for z in zam_data if z.get('termin') == dzisiaj_str or z.get('termin', '9999-12-31') < dzisiaj_str)
         spakowane_dzisiaj = sum(1 for h in hist_data if h.get('data_pakowania', '').startswith(dzisiaj_str))
+        oczekujace_zwroty = sum(1 for z in zwroty_data if z.get('status') == 'Nowy')
         
+        # Dashboard: Zmieniona metryka 4 na ostrzeżenie o zwrotach jeśli jakieś są
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(label="Wszystkie w kolejce", value=len(zam_data))
         m2.metric(label="Wymagane na dzisiaj", value=do_spakowania_dzisiaj)
         m3.metric(label="Spakowane dzisiaj", value=spakowane_dzisiaj)
-        m4.metric(label="Aktywne Dyspozycje", value=len(dyspo_data))
+        if oczekujace_zwroty > 0:
+            m4.markdown(f"**Oczekujące zwroty**<br><span style='font-size:2rem; font-weight:800; color:#ef4444;'>{oczekujace_zwroty} ⚠️</span>", unsafe_allow_html=True)
+        else:
+            m4.metric(label="Oczekujące zwroty", value=oczekujace_zwroty)
         st.divider()
         
-        t1, t2, t3, t4 = st.tabs(["➕ Nowe Zlecenie", "📦 Aktywne na Produkcji", "🗄️ Baza Historyczna", "📝 Dyspozycje i Zadania"])
+        # ZAKŁADKI SZEFA (5 sztuk)
+        t1, t2, t3, t4, t5 = st.tabs(["➕ Nowe Zlecenie", "📦 Aktywne na Produkcji", "🗄️ Baza Historyczna", "📝 Zadania", "↩️ Zwroty i Reklamacje"])
 
         with t1:
             col_form, col_pusty = st.columns([2, 1])
@@ -217,7 +225,7 @@ else:
                             info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
-                        if col_action.button("Wycofaj zlecenie (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
+                        if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if x['id'] != z['id']]
                             save_data(ZAM_FILE, zam_data)
                             pdf_path = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
@@ -278,6 +286,48 @@ else:
                                 dyspo_data = [x for x in dyspo_data if x['id'] != d['id']]
                                 save_data(DYSPOZYCJE_FILE, dyspo_data)
                                 st.rerun()
+                                
+        # --- ZAKŁADKA 5: ZWROTY (NOWA) ---
+        with t5:
+            st.markdown("#### Obsługa Zwrotów i Reklamacji (RMA)")
+            
+            # Podział na nowe zwroty i historię zwrotów
+            nowe_zwroty = [z for z in zwroty_data if z.get('status') == 'Nowy']
+            stare_zwroty = [z for z in zwroty_data if z.get('status') == 'Rozpatrzony']
+            
+            st.markdown("##### 🔴 Oczekujące na Twoją decyzję")
+            if not nowe_zwroty:
+                st.success("Wszystkie zwroty zostały rozpatrzone. Czyste konto!")
+            else:
+                for z in nowe_zwroty:
+                    # Czerwone obramowanie dla nowych zwrotów
+                    with st.container(border=True):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.markdown(f"<span style='color:#ef4444; font-weight:bold; font-size:18px;'>ZAMÓWIENIE NR: {z['nr']}</span>", unsafe_allow_html=True)
+                            st.write(f"**Zgłoszono na magazynie:** {z['data']}")
+                            st.write(f"**Powód zwrotu:** {z['powod']}  |  **Stan towaru po inspekcji:** {z['stan']}")
+                            if z.get('notatki'):
+                                st.info(f"Notatki pracownika: {z['notatki']}")
+                        with col2:
+                            st.write("") # Odstęp
+                            if st.button("Oznacz jako Rozpatrzone / Oddaj Środki", key=f"zwr_{z['id']}", use_container_width=True, type="primary"):
+                                for item in zwroty_data:
+                                    if item['id'] == z['id']:
+                                        item['status'] = 'Rozpatrzony'
+                                        item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                save_data(ZWROTY_FILE, zwroty_data)
+                                st.toast(f"Zwrot {z['nr']} zamknięty!", icon="✅")
+                                st.rerun()
+            
+            st.divider()
+            st.markdown("##### 📁 Archiwum rozwiązanych zwrotów")
+            if not stare_zwroty:
+                st.info("Brak historii.")
+            else:
+                with st.expander("Rozwiń archiwum zwrotów"):
+                    for z in stare_zwroty:
+                        st.markdown(f"**{z['nr']}** - Zgłoszony: {z['data']} | Zakończony: {z['data_rozpatrzenia']} | Stan: {z['stan']}")
 
     # ==========================================
     #           TERMINAL PRACOWNIKA (KDS)
@@ -286,6 +336,7 @@ else:
         
         zam_pracownik = load_data(ZAM_FILE)
         dyspo_pracownik = load_data(DYSPOZYCJE_FILE)
+        zwroty_pracownik = load_data(ZWROTY_FILE)
         
         if 'znane_zam' not in st.session_state:
             st.session_state.znane_zam = {z['id'] for z in zam_pracownik}
@@ -316,7 +367,8 @@ else:
             st.session_state.rola = None
             st.rerun()
 
-        tab_kds, tab_dyspo, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "🕒 OSTATNIE OPERACJE"])
+        # ZAKŁADKI PRACOWNIKA (+ Przyjmij Zwrot)
+        tab_kds, tab_dyspo, tab_zwroty, tab_hist = st.tabs(["📦 AKTYWNE ZLECENIA", "📌 TABLICA ZADAŃ", "↩️ PRZYJMIJ ZWROT", "🕒 OSTATNIE OPERACJE"])
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         with tab_kds:
@@ -350,7 +402,6 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # GENEROWANIE PRZYCISKU DRUKU PRZEZ JS BLOB (BEZ POBIERANIA)
                             if z.get('ma_etykiete'):
                                 sciezka_pdf = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
                                 if os.path.exists(sciezka_pdf):
@@ -393,7 +444,7 @@ else:
                                     """
                                     components.html(html_code, height=50)
                             
-                            st.write("") # Odstęp
+                            st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
                                 st.toast(f"Spakowano: {z['nr']}", icon="✔️")
@@ -423,6 +474,38 @@ else:
                                 move_dyspozycja_to_history(d['id'])
                                 st.toast("Zadanie odhaczone!", icon="👍")
                                 st.rerun()
+
+        # --- ZAKŁADKA 3: PRZYJMIJ ZWROT (NOWA) ---
+        with tab_zwroty:
+            st.markdown("### Wprowadź paczkę zwrotną do systemu")
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                with st.form("formularz_zwrotu", clear_on_submit=True):
+                    nr_zwr = st.text_input("Numer zwracanego zamówienia", placeholder="np. ZAM/001 (z etykiety na paczce)")
+                    stan_zwr = st.selectbox("W jakim stanie jest zwrócony towar?", ["Pełnowartościowy (Nowy)", "Uszkodzony przez klienta", "Uszkodzony w transporcie", "Niebrakujący towar (częściowy zwrot)"])
+                    powod_zwr = st.selectbox("Podany powód zwrotu (jeśli jest na formularzu)", ["Brak formularza", "Odstąpienie 14 dni", "Reklamacja / Wada towaru", "Pomyłka przy pakowaniu"])
+                    notatki_zwr = st.text_area("Uwagi dla szefa (opcjonalnie)", placeholder="np. brakuje kabla zasilającego...")
+                    
+                    if st.form_submit_button("ZAREJESTRUJ ZWROT W SYSTEMIE", type="primary"):
+                        if nr_zwr:
+                            nowy_zwrot = {
+                                "id": str(uuid.uuid4()),
+                                "nr": nr_zwr,
+                                "stan": stan_zwr,
+                                "powod": powod_zwr,
+                                "notatki": notatki_zwr,
+                                "status": "Nowy",
+                                "data": datetime.now().strftime("%Y-%m-%d %H:%M")
+                            }
+                            zwroty_pracownik.insert(0, nowy_zwrot)
+                            save_data(ZWROTY_FILE, zwroty_pracownik)
+                            st.success(f"Zwrot paczki {nr_zwr} przekazany szefowi!")
+                        else:
+                            st.error("Podaj chociaż numer zamówienia.")
+            
+            with col2:
+                st.info("💡 **Instrukcja dla pakowni:**\n\n1. Otwórz karton zwrotny.\n2. Znajdź numer zamówienia (na liście przewozowym lub formularzu).\n3. Obejrzyj towar.\n4. Zarejestruj zwrot w formularzu po lewej.\n5. Odłóż towar na strefę zwrotów.")
 
         with tab_hist:
             hist = load_data(HIST_FILE)[:15] 
