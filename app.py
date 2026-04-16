@@ -151,7 +151,6 @@ else:
     # ==========================================
     if st.session_state.rola == 'szef':
         
-        # --- ZMIANA 1: NAPRAWA WYLOGOWANIA SZEFA ---
         c1, c2, c3 = st.columns([6, 2, 2])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -200,13 +199,13 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                has_label = "False"
+                                has_label = False
                                 
                                 if plik_etykiety is not None:
                                     sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
                                     with open(sciezka_pdf, "wb") as f:
                                         f.write(plik_etykiety.getbuffer())
-                                    has_label = "True"
+                                    has_label = True
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
@@ -230,7 +229,6 @@ else:
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
                         
-                        # ZMIANA 2: Sprawdzamy fizycznie czy plik na serwerze istnieje
                         sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
                         if os.path.exists(sciezka_pdf):
                             info_text += "<br><span style='color:#1e3a8a;'>📄 Wgrano etykietę PDF</span>"
@@ -377,17 +375,39 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- ZMIANA 2: NIEZAWODNE WYŚWIETLANIE ETYKIET ---
+                            # --- ZMIANA: AUTOMATYCZNE WYWOŁYWANIE DRUKOWANIA ---
                             sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
                             if os.path.exists(sciezka_pdf):
-                                with open(sciezka_pdf, "rb") as file:
-                                    st.download_button(
-                                        label="🖨️ OTWÓRZ ETYKIETĘ",
-                                        data=file,
-                                        file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                        mime="application/pdf",
-                                        use_container_width=True
-                                    )
+                                if st.button("🖨️ DRUKUJ ETYKIETĘ", key=f"print_{z['id']}", use_container_width=True):
+                                    with open(sciezka_pdf, "rb") as file:
+                                        pdf_b64 = base64.b64encode(file.read()).decode('utf-8')
+                                    
+                                    js_print = f"""
+                                    <script>
+                                        const b64 = "{pdf_b64}";
+                                        const byteCharacters = atob(b64);
+                                        const byteNumbers = new Array(byteCharacters.length);
+                                        for (let i = 0; i < byteCharacters.length; i++) {{
+                                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                        }}
+                                        const byteArray = new Uint8Array(byteNumbers);
+                                        const blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        
+                                        const iframe = document.createElement('iframe');
+                                        iframe.style.display = 'none';
+                                        iframe.src = blobUrl;
+                                        document.body.appendChild(iframe);
+                                        
+                                        iframe.onload = function() {{
+                                            setTimeout(function() {{
+                                                iframe.contentWindow.focus();
+                                                iframe.contentWindow.print();
+                                            }}, 250);
+                                        }};
+                                    </script>
+                                    """
+                                    components.html(js_print, height=0)
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
