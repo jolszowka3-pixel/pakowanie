@@ -53,42 +53,44 @@ ZAM_FILE = "Zamowienia"
 HIST_FILE = "Historia"
 DYSPOZYCJE_FILE = "Dyspozycje"
 ZWROTY_FILE = "Zwroty"
-
-LABELS_DIR = "etykiety" 
-if not os.path.exists(LABELS_DIR):
-    os.makedirs(LABELS_DIR)
+ETYKIETY_FILE = "Etykiety"
 
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# Definicja nagłówków dla każdej karty (zapobiega błędowi przy pustych danych)
+# Definicja nagłówków
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete"],
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
-    "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"]
+    "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"],
+    "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
 def load_data(sheet_name):
     try:
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
+        df = df.fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
 def save_data(sheet_name, data):
-    # Jeśli lista jest pusta, tworzymy DataFrame z samymi nagłówkami
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
-    
-    # Próba zapisu z obsługą błędów
     try:
         conn.update(worksheet=sheet_name, data=df)
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
+
+def usun_etykiete(order_id):
+    etyk_data = load_data(ETYKIETY_FILE)
+    nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
+    if len(nowe_etyk) != len(etyk_data):
+        save_data(ETYKIETY_FILE, nowe_etyk)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -96,11 +98,11 @@ def move_to_history(order_id):
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Dodajemy nagłówek jeśli go nie ma
         hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
+        usun_etykiete(order_id) # Zwalniamy miejsce po spakowaniu
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -108,6 +110,7 @@ def restore_from_history(order_id):
     order = next((x for x in hist if str(x.get('id')) == str(order_id)), None)
     if order:
         if 'data_pakowania' in order: del order['data_pakowania']
+        order['ma_etykiete'] = "False" 
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
@@ -151,7 +154,6 @@ else:
     # ==========================================
     if st.session_state.rola == 'szef':
         
-        # --- ZMIANA 1: NAPRAWA WYLOGOWANIA SZEFA ---
         c1, c2, c3 = st.columns([6, 2, 2])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -164,13 +166,15 @@ else:
         hist_data = load_data(HIST_FILE)
         dyspo_data = load_data(DYSPOZYCJE_FILE)
         zwroty_data = load_data(ZWROTY_FILE)
+        etykiety_baza = load_data(ETYKIETY_FILE) # Ładujemy raz, żeby było szybko
+        
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
         
         st.markdown("<h3 style='color: #1e3a8a;'>📊 Przegląd Operacyjny</h3>", unsafe_allow_html=True)
         
         do_spakowania_dzisiaj = sum(1 for z in zam_data if str(z.get('termin', '9999-12-31')) <= dzisiaj_str)
         spakowane_dzisiaj = sum(1 for h in hist_data if str(h.get('data_pakowania', '')).startswith(dzisiaj_str))
-        oczekujace_zwroty = sum(1 for z in zwroty_data if z.get('status') == 'Nowy')
+        oczekujace_zwroty = sum(1 for z in zwroty_data if str(z.get('status')) == 'Nowy')
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(label="Wszystkie w kolejce", value=len(zam_data))
@@ -192,7 +196,7 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     co = st.text_area("Specyfikacja (co spakować)")
-                    plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (opcjonalnie)", type=["pdf"])
+                    plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
                     
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
@@ -200,18 +204,24 @@ else:
                                 st.toast("Zlecenie o tym numerze zostało przed chwilą dodane!", icon="⚠️")
                             else:
                                 new_id = str(uuid.uuid4())
-                                has_label = "False"
                                 
+                                # CIĘCIE I WGRYWANIE DO ARKUSZA "Etykiety"
                                 if plik_etykiety is not None:
-                                    sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
-                                    with open(sciezka_pdf, "wb") as f:
-                                        f.write(plik_etykiety.getbuffer())
-                                    has_label = "True"
+                                    pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
+                                    chunk_size = 45000 
+                                    for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
+                                        chunk = pdf_b64[i:i+chunk_size]
+                                        etykiety_baza.append({
+                                            "zam_id": new_id,
+                                            "czesc": idx,
+                                            "dane": chunk
+                                        })
+                                    save_data(ETYKIETY_FILE, etykiety_baza)
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": has_label
+                                    "ma_etykiete": "True" # To pole jest już tylko informacyjne
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
@@ -230,18 +240,16 @@ else:
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
                         
-                        # ZMIANA 2: Sprawdzamy fizycznie czy plik na serwerze istnieje
-                        sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
-                        if os.path.exists(sciezka_pdf):
-                            info_text += "<br><span style='color:#1e3a8a;'>📄 Wgrano etykietę PDF</span>"
-                        
+                        # ZMIANA: Sprawdzamy czy fizycznie w arkuszu Etykiety są dane dla tego ID
+                        czy_ma_plik = any(str(e.get('zam_id')) == str(z['id']) for e in etykiety_baza)
+                        if czy_ma_plik: 
+                            info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
-                            if os.path.exists(sciezka_pdf):
-                                os.remove(sciezka_pdf)
+                            usun_etykiete(z['id']) 
                             st.rerun()
 
         with t3:
@@ -359,6 +367,10 @@ else:
                 st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
                 cols = st.columns(3)
+                
+                # Ładujemy bazę etykiet JEDEN RAZ na górze dla optymalizacji
+                etykiety_pracownik = load_data(ETYKIETY_FILE)
+                
                 for i, z in enumerate(zam_pracownik):
                     with cols[i % 3]:
                         with st.container(border=True):
@@ -377,17 +389,77 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # --- ZMIANA 2: NIEZAWODNE WYŚWIETLANIE ETYKIET ---
-                            sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
-                            if os.path.exists(sciezka_pdf):
-                                with open(sciezka_pdf, "rb") as file:
-                                    st.download_button(
-                                        label="🖨️ OTWÓRZ ETYKIETĘ",
-                                        data=file,
-                                        file_name=f"Etykieta_{z.get('nr')}.pdf",
-                                        mime="application/pdf",
-                                        use_container_width=True
-                                    )
+                            # --- ZMIANA: Szukamy kawałków po zam_id (omijamy sprawdzanie ma_etykiete) ---
+                            kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
+                            
+                            if kawalki:
+                                kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
+                                
+                                html_code = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                <style>
+                                    body {{ margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }}
+                                    .btn {{
+                                        width: 100%;
+                                        padding: 0.5rem 1rem;
+                                        background-color: #f8fafc;
+                                        color: #1e3a8a;
+                                        border: 2px solid #1e3a8a;
+                                        border-radius: 8px;
+                                        font-size: 16px;
+                                        font-weight: bold;
+                                        cursor: pointer;
+                                        box-sizing: border-box;
+                                        height: 45px;
+                                        display: flex;
+                                        align-items: center;
+                                        justify-content: center;
+                                        transition: all 0.2s;
+                                    }}
+                                    .btn:hover {{
+                                        background-color: #1e3a8a;
+                                        color: #ffffff;
+                                    }}
+                                </style>
+                                </head>
+                                <body>
+                                    <button class="btn" onclick="printPDF()">🖨️ DRUKUJ ETYKIETĘ</button>
+                                    <script>
+                                    function printPDF() {{
+                                        const b64 = "{pdf_b64}";
+                                        const byteCharacters = atob(b64);
+                                        const byteNumbers = new Array(byteCharacters.length);
+                                        for (let i = 0; i < byteCharacters.length; i++) {{
+                                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                        }}
+                                        const byteArray = new Uint8Array(byteNumbers);
+                                        const blob = new Blob([byteArray], {{type: 'application/pdf'}});
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        
+                                        const printFrame = document.createElement('iframe');
+                                        printFrame.style.display = 'none';
+                                        printFrame.src = blobUrl;
+                                        document.body.appendChild(printFrame);
+                                        
+                                        printFrame.onload = function() {{
+                                            setTimeout(function() {{
+                                                try {{
+                                                    printFrame.contentWindow.focus();
+                                                    printFrame.contentWindow.print();
+                                                }} catch (e) {{
+                                                    window.open(blobUrl, '_blank');
+                                                }}
+                                            }}, 250);
+                                        }};
+                                    }}
+                                    </script>
+                                </body>
+                                </html>
+                                """
+                                components.html(html_code, height=55)
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
