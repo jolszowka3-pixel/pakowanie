@@ -53,20 +53,17 @@ ZAM_FILE = "Zamowienia"
 HIST_FILE = "Historia"
 DYSPOZYCJE_FILE = "Dyspozycje"
 ZWROTY_FILE = "Zwroty"
-
-LABELS_DIR = "etykiety" 
-if not os.path.exists(LABELS_DIR):
-    os.makedirs(LABELS_DIR)
+ETYKIETY_FILE = "Etykiety" # <--- Nowa karta na kawałki PDF
 
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# Definicja nagłówków dla każdej karty (zapobiega błędowi przy pustych danych)
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete"],
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
-    "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"]
+    "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"],
+    "Etykiety": ["zam_id", "czesc", "dane"] # <--- Nagłówki nowej karty
 }
 
 def load_data(sheet_name):
@@ -78,17 +75,21 @@ def load_data(sheet_name):
         return []
 
 def save_data(sheet_name, data):
-    # Jeśli lista jest pusta, tworzymy DataFrame z samymi nagłówkami
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
-    
-    # Próba zapisu z obsługą błędów
     try:
         conn.update(worksheet=sheet_name, data=df)
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
+
+# Funkcja czyszcząca etykiety, by arkusz nie puchł w nieskończoność
+def usun_etykiete(order_id):
+    etyk_data = load_data(ETYKIETY_FILE)
+    nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
+    if len(nowe_etyk) != len(etyk_data):
+        save_data(ETYKIETY_FILE, nowe_etyk)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -96,11 +97,11 @@ def move_to_history(order_id):
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Dodajemy nagłówek jeśli go nie ma
         hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
+        usun_etykiete(order_id) # Usunięcie zużytej etykiety z chmury
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -150,15 +151,12 @@ else:
     #             PANEL ADMINISTRATORA
     # ==========================================
     if st.session_state.rola == 'szef':
-        
-        # --- ZMIANA: Przycisk wylogowania wyciągnięty z ukrytego menu bocznego ---
-        col_title, col_user, col_logout = st.columns([6, 2, 1])
-        col_title.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
-        col_user.markdown("<div style='text-align: right; margin-top: 10px;'><b>Użytkownik:</b> Admin 👨‍💼</div>", unsafe_allow_html=True)
-        if col_logout.button("Wyloguj się", use_container_width=True):
-            st.session_state.rola = None
-            st.rerun()
-        st.divider()
+        with st.sidebar:
+            st.markdown("**Użytkownik:** Administrator 👨‍💼")
+            st.divider()
+            if st.button("Wyloguj się", use_container_width=True):
+                st.session_state.rola = None
+                st.rerun()
 
         zam_data = load_data(ZAM_FILE)
         hist_data = load_data(HIST_FILE)
@@ -202,16 +200,25 @@ else:
                                 new_id = str(uuid.uuid4())
                                 has_label = False
                                 
+                                # --- CIĘCIE PLIKU PDF NA KAWAŁKI I ZAPIS ---
                                 if plik_etykiety is not None:
-                                    sciezka_pdf = os.path.join(LABELS_DIR, f"{new_id}.pdf")
-                                    with open(sciezka_pdf, "wb") as f:
-                                        f.write(plik_etykiety.getbuffer())
+                                    pdf_b64 = base64.b64encode(plik_etykiety.read()).decode('utf-8')
+                                    etykiety_db = load_data(ETYKIETY_FILE)
+                                    chunk_size = 40000 # Bezpieczny rozmiar poniżej 50k znaków
+                                    for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
+                                        chunk = pdf_b64[i:i+chunk_size]
+                                        etykiety_db.append({
+                                            "zam_id": new_id,
+                                            "czesc": idx,
+                                            "dane": chunk
+                                        })
+                                    save_data(ETYKIETY_FILE, etykiety_db)
                                     has_label = True
 
                                 zam_data.append({
                                     "id": new_id, "nr": nr, "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"),
-                                    "ma_etykiete": has_label
+                                    "ma_etykiete": str(has_label) # Zapisujemy True jako String
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
@@ -229,12 +236,13 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         info_text = f"**Co spakować:**<br>{z['co']}"
-                        if str(z.get('ma_etykiete')).lower() == 'true': info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
+                        if str(z.get('ma_etykiete')).lower() in ['true', '1']: info_text += "<br><span style='color:#1e3a8a;'>📄 Dołączono etykietę PDF</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             zam_data = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
                             save_data(ZAM_FILE, zam_data)
+                            usun_etykiete(z['id']) # Usuwa kawałki z bazy
                             st.rerun()
 
         with t3:
@@ -352,6 +360,10 @@ else:
                 st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
                 cols = st.columns(3)
+                
+                # --- POBIERANIE WSZYSTKICH ETYKIET DO PAMIĘCI (ŻEBY BYŁO SZYBKO) ---
+                etykiety_pracownik = load_data(ETYKIETY_FILE)
+                
                 for i, z in enumerate(zam_pracownik):
                     with cols[i % 3]:
                         with st.container(border=True):
@@ -370,17 +382,26 @@ else:
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            if str(z.get('ma_etykiete')).lower() == 'true':
-                                sciezka_pdf = os.path.join(LABELS_DIR, f"{z.get('id')}.pdf")
-                                if os.path.exists(sciezka_pdf):
-                                    with open(sciezka_pdf, "rb") as file:
+                            # --- KLEJENIE ETYKIETY U PRACOWNIKA ---
+                            if str(z.get('ma_etykiete')).lower() in ['true', '1']:
+                                # Szukamy wszystkich kawałków dla tego zamówienia
+                                moje_kawalki = [e for e in etykiety_pracownik if str(e.get('zam_id')) == str(z['id'])]
+                                if moje_kawalki:
+                                    # Sortujemy by ułożyć je w odpowiedniej kolejności (0, 1, 2...)
+                                    moje_kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                    pelny_b64 = "".join([e.get('dane', '') for e in moje_kawalki])
+                                    
+                                    try:
+                                        pdf_bytes = base64.b64decode(pelny_b64)
                                         st.download_button(
                                             label="🖨️ OTWÓRZ ETYKIETĘ",
-                                            data=file,
+                                            data=pdf_bytes,
                                             file_name=f"Etykieta_{z.get('nr')}.pdf",
                                             mime="application/pdf",
                                             use_container_width=True
                                         )
+                                    except Exception:
+                                        st.error("Błąd pliku PDF")
                             
                             st.write("") 
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
