@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 import base64
+import streamlit.components.v1 as components
 from datetime import datetime, date
 
 # --- 1. KONFIGURACJA STRONY ---
@@ -345,25 +346,54 @@ else:
                                 <div style='color: #64748b; font-size: 14px; text-transform: uppercase; font-weight: bold; letter-spacing: 1px;'>Zlecenie Nr</div>
                                 <div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; color: #0f172a;'>{z['nr']}</div>
                                 <hr style='margin: 15px 0; border: none; border-top: 1px dashed #cbd5e1;'>
-                                <div style='font-size: 20px; font-weight: 600; margin-bottom: 25px; color: #334155;'>{z['co']}</div>
+                                <div style='font-size: 20px; font-weight: 600; margin-bottom: 20px; color: #334155;'>{z['co']}</div>
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # BEZPOŚREDNIE WYŚWIETLANIE ETYKIETY PDF DO DRUKU
+                            # GENEROWANIE PRZYCISKU DRUKU PRZEZ JS BLOB (BEZ POBIERANIA)
                             if z.get('ma_etykiete'):
                                 sciezka_pdf = os.path.join(LABELS_DIR, f"{z['id']}.pdf")
                                 if os.path.exists(sciezka_pdf):
                                     with open(sciezka_pdf, "rb") as pdf_file:
                                         base64_pdf = base64.b64encode(pdf_file.read()).decode('utf-8')
                                         
-                                    pdf_display = f'''
-                                    <div style="margin-bottom: 20px;">
-                                        <div style="color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px;">📄 PODGLĄD ETYKIETY (Kliknij ikonę drukarki poniżej)</div>
-                                        <iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="300px" style="border: 2px solid #e2e8f0; border-radius: 8px;"></iframe>
-                                    </div>
-                                    '''
-                                    st.markdown(pdf_display, unsafe_allow_html=True)
+                                    html_code = f"""
+                                    <html>
+                                    <head>
+                                        <style>
+                                            .btn {{
+                                                display: block; width: 100%; padding: 12px 0; 
+                                                background-color: #f59e0b; color: white; 
+                                                text-align: center; text-decoration: none; 
+                                                border-radius: 8px; font-family: Arial, sans-serif; 
+                                                font-size: 15px; font-weight: bold; cursor: pointer;
+                                                box-sizing: border-box; transition: background 0.3s;
+                                            }}
+                                            .btn:hover {{ background-color: #d97706; }}
+                                        </style>
+                                    </head>
+                                    <body style="margin:0; padding:0;">
+                                        <script>
+                                        function init() {{
+                                            const b64 = "{base64_pdf}";
+                                            const bin = atob(b64);
+                                            const arr = new Uint8Array(bin.length);
+                                            for(let i=0; i<bin.length; i++) {{
+                                                arr[i] = bin.charCodeAt(i);
+                                            }}
+                                            const blob = new Blob([arr], {{type: 'application/pdf'}});
+                                            const url = URL.createObjectURL(blob);
+                                            document.getElementById('pdflink').href = url;
+                                        }}
+                                        window.onload = init;
+                                        </script>
+                                        <a id="pdflink" target="_blank" class="btn">🖨️ OTWÓRZ DO DRUKU</a>
+                                    </body>
+                                    </html>
+                                    """
+                                    components.html(html_code, height=50)
                             
+                            st.write("") # Odstęp
                             if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                 move_to_history(z['id'])
                                 st.toast(f"Spakowano: {z['nr']}", icon="✔️")
