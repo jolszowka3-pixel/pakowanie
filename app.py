@@ -205,6 +205,7 @@ else:
 
     # --- PANEL ADMINISTRATORA ---
     if st.session_state.rola == 'szef':
+        # Nagłówek Panelu Szefa z przyciskiem odświeżania
         c1, c2, c3, c4 = st.columns([5, 2, 1.5, 1.5])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -245,7 +246,6 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     
-                    # ZMIANA: Przycisk wyboru rodzaju dostawy
                     typ_wysylki = st.radio("Rodzaj dostawy", ["Kurier (Internet)", "Bezpośrednio do klienta"], horizontal=True)
                     
                     co = st.text_area("Specyfikacja (co spakować)")
@@ -265,7 +265,6 @@ else:
                                         etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
                                     save_data(ETYKIETY_FILE, etyk_baza)
                                 
-                                # ZMIANA: Zapisujemy wybrany rodzaj dostawy do bazy
                                 zam_data.append({
                                     "id": new_id, 
                                     "nr": nr, 
@@ -287,7 +286,6 @@ else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        # ZMIANA: Wyświetlanie rodzaju dostawy u szefa
                         info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br>**Co spakować:**<br>{z['co']}"
                         if str(z.get('ma_etykiete')) == "True": info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
@@ -387,39 +385,83 @@ else:
         dzisiaj_str = datetime.now().strftime("%Y-%m-%d")
 
         with tab_kds:
-            if not zam_data: st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
+            if not zam_data: 
+                st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
-                cols = st.columns(3)
+                # ZMIANA: Podzakładki dla pracownika
+                sub_kurier, sub_wlasna = st.tabs(["📦 WYSYŁKI KURIERSKIE", "🚚 BEZPOŚREDNIO DO KLIENTA"])
                 etyk_wszystkie = load_data(ETYKIETY_FILE)
-                for i, z in enumerate(zam_data):
-                    with cols[i % 3]:
-                        with st.container(border=True):
-                            # ZMIANA: Etykietki u pracownika (Data + Rodzaj Wysyłki)
-                            t_zlec = str(z.get('termin', '9999-12-31'))
-                            if t_zlec < dzisiaj_str: badge = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {t_zlec}</div>"
-                            elif t_zlec == dzisiaj_str: badge = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
-                            else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
-                            
-                            typ_w = str(z.get('typ_wysylki', 'Brak danych'))
-                            if "Kurier" in typ_w: 
-                                badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
-                            elif "Bezpośrednio" in typ_w: 
-                                badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
-                            else: 
-                                badge_typ = ""
+                
+                zam_kurier = [z for z in zam_data if "Kurier" in str(z.get('typ_wysylki', ''))]
+                zam_bezposrednio = [z for z in zam_data if "Kurier" not in str(z.get('typ_wysylki', ''))]
+                
+                with sub_kurier:
+                    if not zam_kurier:
+                        st.info("Brak przesyłek kurierskich w kolejce.")
+                    else:
+                        cols_k = st.columns(3)
+                        for i, z in enumerate(zam_kurier):
+                            with cols_k[i % 3]:
+                                with st.container(border=True):
+                                    t_zlec = str(z.get('termin', '9999-12-31'))
+                                    if t_zlec < dzisiaj_str: badge = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {t_zlec}</div>"
+                                    elif t_zlec == dzisiaj_str: badge = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
+                                    else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
+                                    
+                                    typ_w = str(z.get('typ_wysylki', 'Brak danych'))
+                                    if "Kurier" in typ_w: 
+                                        badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
+                                    elif "Bezpośrednio" in typ_w: 
+                                        badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
+                                    else: 
+                                        badge_typ = ""
 
-                            st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
-                            
-                            kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
-                            if kawalki:
-                                kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
-                                pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
-                                html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
-                                components.html(html_code, height=55)
-                            st.write("") 
-                            if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
-                                move_to_history(z['id'])
-                                st.rerun()
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                                    
+                                    kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
+                                    if kawalki:
+                                        kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                        pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
+                                        html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
+                                        components.html(html_code, height=55)
+                                    st.write("") 
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_k_{z['id']}", use_container_width=True, type="primary"):
+                                        move_to_history(z['id'])
+                                        st.rerun()
+
+                with sub_wlasna:
+                    if not zam_bezposrednio:
+                        st.info("Brak dostaw bezpośrednich w kolejce.")
+                    else:
+                        cols_w = st.columns(3)
+                        for i, z in enumerate(zam_bezposrednio):
+                            with cols_w[i % 3]:
+                                with st.container(border=True):
+                                    t_zlec = str(z.get('termin', '9999-12-31'))
+                                    if t_zlec < dzisiaj_str: badge = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {t_zlec}</div>"
+                                    elif t_zlec == dzisiaj_str: badge = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
+                                    else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
+                                    
+                                    typ_w = str(z.get('typ_wysylki', 'Brak danych'))
+                                    if "Kurier" in typ_w: 
+                                        badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
+                                    elif "Bezpośrednio" in typ_w: 
+                                        badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
+                                    else: 
+                                        badge_typ = ""
+
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                                    
+                                    kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
+                                    if kawalki:
+                                        kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
+                                        pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
+                                        html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
+                                        components.html(html_code, height=55)
+                                    st.write("") 
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_w_{z['id']}", use_container_width=True, type="primary"):
+                                        move_to_history(z['id'])
+                                        st.rerun()
 
         with tab_dyspo:
             if not dyspo_data: st.markdown("<div style='text-align: center; padding: 80px 0;'><h1 style='color: #94a3b8;'>Brak dodatkowych zadań</h1></div>", unsafe_allow_html=True)
@@ -457,7 +499,6 @@ else:
                 for h in hist_lim:
                     with st.expander(f"✔️ ZAM: {h.get('nr')} | {h.get('data_pakowania', '')}"):
                         c1, c2 = st.columns([3, 1])
-                        # ZMIANA: Widoczny typ w historii pracownika
                         c1.write(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')} | **Zawartość:** {h.get('co')}")
                         if c2.button("Cofnij", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
