@@ -205,7 +205,6 @@ else:
 
     # --- PANEL ADMINISTRATORA ---
     if st.session_state.rola == 'szef':
-        # Nagłówek Panelu Szefa z przyciskiem odświeżania
         c1, c2, c3, c4 = st.columns([5, 2, 1.5, 1.5])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -388,14 +387,14 @@ else:
             if not zam_data: 
                 st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
-                # ZMIANA: Podzakładki dla pracownika
-                sub_kurier, sub_wlasna = st.tabs(["📦 WYSYŁKI KURIERSKIE", "🚚 BEZPOŚREDNIO DO KLIENTA"])
+                # --- PODZIAŁ NA PODZAKŁADKI KURIER I BEZPOŚREDNIO ---
+                tab_kurier, tab_bezposrednio = st.tabs(["📦 WYSYŁKI KURIERSKIE", "🚚 BEZPOŚREDNIO DO KLIENTA"])
                 etyk_wszystkie = load_data(ETYKIETY_FILE)
                 
                 zam_kurier = [z for z in zam_data if "Kurier" in str(z.get('typ_wysylki', ''))]
-                zam_bezposrednio = [z for z in zam_data if "Kurier" not in str(z.get('typ_wysylki', ''))]
+                zam_wlasna = [z for z in zam_data if "Kurier" not in str(z.get('typ_wysylki', ''))]
                 
-                with sub_kurier:
+                with tab_kurier:
                     if not zam_kurier:
                         st.info("Brak przesyłek kurierskich w kolejce.")
                     else:
@@ -425,16 +424,16 @@ else:
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
                                     st.write("") 
-                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_k_{z['id']}", use_container_width=True, type="primary"):
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
 
-                with sub_wlasna:
-                    if not zam_bezposrednio:
+                with tab_bezposrednio:
+                    if not zam_wlasna:
                         st.info("Brak dostaw bezpośrednich w kolejce.")
                     else:
                         cols_w = st.columns(3)
-                        for i, z in enumerate(zam_bezposrednio):
+                        for i, z in enumerate(zam_wlasna):
                             with cols_w[i % 3]:
                                 with st.container(border=True):
                                     t_zlec = str(z.get('termin', '9999-12-31'))
@@ -459,7 +458,7 @@ else:
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
                                     st.write("") 
-                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_w_{z['id']}", use_container_width=True, type="primary"):
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
 
