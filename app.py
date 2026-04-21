@@ -4,6 +4,7 @@ import os
 import uuid
 import base64
 import pandas as pd
+import time
 from streamlit_gsheets import GSheetsConnection
 import streamlit.components.v1 as components
 from datetime import datetime, date
@@ -114,17 +115,16 @@ SHEET_HEADERS = {
     "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
-# ZMIANA: Usunięto wadliwy podwójny cache. Teraz połączenie cache'uje dane optymalnie na 10 sekund.
+# ZMIANA: Usunięto podwójny dekorator cache, który powodował gubienie danych
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name, ttl=10)
+        df = conn.read(worksheet=sheet_name, ttl=5)
         df = df.dropna(how='all') 
         df = df.fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
-# ZMIANA: Dodano opcję sterowania czyszczeniem cache'u
 def save_data(sheet_name, data, clear_cache=True):
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
@@ -144,7 +144,6 @@ def usun_etykiete(order_id, clear_cache=True):
         save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=clear_cache)
 
 def move_to_history(order_id):
-    # ODCZYT WSZYSTKIEGO NA POCZĄTKU
     zam = load_data(ZAM_FILE)
     hist = load_data(HIST_FILE)
     etyk_data = load_data(ETYKIETY_FILE)
@@ -156,14 +155,15 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
         
-        # ZAPIS WSZYSTKIEGO BEZ RESETU PAMIĘCI
+        # Zapis bez czyszczenia po każdym kroku (chroni API Google)
         save_data(ZAM_FILE, zam, clear_cache=False)
         save_data(HIST_FILE, hist, clear_cache=False)
         if len(nowe_etyk) != len(etyk_data):
             save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=False)
-            
-        # RESET PAMIĘCI TYLKO RAZ NA SAM KONIEC
+        
+        # Ostateczne wyczyszczenie i mikro-pauza na synchronizację serwerów Google
         st.cache_data.clear()
+        time.sleep(0.5)
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -179,11 +179,14 @@ def restore_from_history(order_id):
         save_data(ZAM_FILE, zam, clear_cache=False)
         save_data(HIST_FILE, hist, clear_cache=False)
         st.cache_data.clear()
+        time.sleep(0.5)
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
     dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
-    save_data(DYSPOZYCJE_FILE, dyspo, clear_cache=True)
+    save_data(DYSPOZYCJE_FILE, dyspo, clear_cache=False)
+    st.cache_data.clear()
+    time.sleep(0.5)
 
 # --- 4. SESJA I LOGOWANIE ---
 if 'rola' not in st.session_state: 
@@ -287,7 +290,8 @@ else:
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data, clear_cache=False)
-                                st.cache_data.clear() # Czyścimy dopiero na końcu
+                                st.cache_data.clear()
+                                time.sleep(0.5)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
                         else: st.toast("Wypełnij wymagane pola formularza.", icon="❗️")
@@ -307,6 +311,7 @@ else:
                             save_data(ZAM_FILE, nowe_zam, clear_cache=False)
                             usun_etykiete(z['id'], clear_cache=False) 
                             st.cache_data.clear()
+                            time.sleep(0.5)
                             st.rerun()
 
         with t3:
@@ -324,7 +329,9 @@ else:
                 with st.expander("⚙️ Zaawansowana administracja rekordami"):
                     edited_hist = st.data_editor(hist_data, num_rows="dynamic", use_container_width=True)
                     if st.button("Zapisz zmiany w bazie zamówień"):
-                        save_data(HIST_FILE, edited_hist)
+                        save_data(HIST_FILE, edited_hist, clear_cache=False)
+                        st.cache_data.clear()
+                        time.sleep(0.5)
                         st.toast("Zaktualizowano.", icon="💾")
 
         with t4:
@@ -336,7 +343,9 @@ else:
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
                             dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc_dysp, "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                            save_data(DYSPOZYCJE_FILE, dyspo_data)
+                            save_data(DYSPOZYCJE_FILE, dyspo_data, clear_cache=False)
+                            st.cache_data.clear()
+                            time.sleep(0.5)
                             st.rerun()
             with col_d2:
                 st.markdown("#### Aktywne zadania")
@@ -346,7 +355,9 @@ else:
                         with st.container(border=True):
                             st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
                             if st.button("Usuń", key=f"del_dysp_{d['id']}"):
-                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])])
+                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])], clear_cache=False)
+                                st.cache_data.clear()
+                                time.sleep(0.5)
                                 st.rerun()
                                 
         with t5:
@@ -368,7 +379,9 @@ else:
                                     if str(item['id']) == str(z['id']):
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                                save_data(ZWROTY_FILE, zwroty_data)
+                                save_data(ZWROTY_FILE, zwroty_data, clear_cache=False)
+                                st.cache_data.clear()
+                                time.sleep(0.5)
                                 st.rerun()
             st.divider()
             with st.expander("📁 Archiwum rozwiązanych zwrotów"):
@@ -376,7 +389,6 @@ else:
 
     # --- TERMINAL PRACOWNIKA ---
     elif st.session_state.rola == 'pracownik':
-        # Audio Alert Logic
         if 'znane_zam' not in st.session_state: st.session_state.znane_zam = {str(z.get('id')) for z in zam_data}
         if 'znane_dysp' not in st.session_state: st.session_state.znane_dysp = {str(d.get('id')) for d in dyspo_data}
         akt_zam_ids = {str(z.get('id')) for z in zam_data}
@@ -500,7 +512,9 @@ else:
                     if st.form_submit_button("ZAREJESTRUJ ZWROT", type="primary"):
                         if nr_zwr:
                             zwroty_data.insert(0, {"id": str(uuid.uuid4()), "nr": nr_zwr, "stan": stan_zwr, "powod": powod_zwr, "notatki": notatki_zwr, "status": "Nowy", "data": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                            save_data(ZWROTY_FILE, zwroty_data)
+                            save_data(ZWROTY_FILE, zwroty_data, clear_cache=False)
+                            st.cache_data.clear()
+                            time.sleep(0.5)
                             st.toast("Zarejestrowano!", icon="✅")
                             st.rerun()
                         else: st.error("Podaj numer.")
