@@ -8,14 +8,9 @@ import time
 from streamlit_gsheets import GSheetsConnection
 import streamlit.components.v1 as components
 from datetime import datetime, date
-from streamlit_autorefresh import st_autorefresh
 
 # --- 1. KONFIGURACJA STRONY ---
-st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
-
-# --- AUTO-ODŚWIEŻANIE ---
-# Wymusza odświeżenie strony co 30 sekund (30000 ms). Synchronizuje panele bez blokowania API Google.
-st_autorefresh(interval=30000, limit=None, key="data_refresher")
+st.set_page_config(page_title="System Zarządzania Wysyłką", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
 # --- 2. PROFESJONALNY CSS (Enterprise Design) ---
 st.markdown("""
@@ -123,7 +118,6 @@ ETYKIETY_FILE = "Etykiety"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# ZMIANA: Dodano kolumnę "postep" (postęp pakowania)
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "typ_wysylki", "postep"],
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania", "typ_wysylki", "postep"],
@@ -134,31 +128,29 @@ SHEET_HEADERS = {
 
 def load_data(sheet_name):
     try:
-        # Pamięć 10 sekund - chroni przed limitem Google API
-        df = conn.read(worksheet=sheet_name, ttl=10)
+        # Zawsze pobieramy najnowsze dane po akcji (ttl=0)
+        df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
         df = df.fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
-def save_data(sheet_name, data, clear_cache=True):
+def save_data(sheet_name, data):
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
-        if clear_cache:
-            st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
-def usun_etykiete(order_id, clear_cache=True):
+def usun_etykiete(order_id):
     etyk_data = load_data(ETYKIETY_FILE)
     nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
     if len(nowe_etyk) != len(etyk_data):
-        save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=clear_cache)
+        save_data(ETYKIETY_FILE, nowe_etyk)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -172,12 +164,11 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
         
-        save_data(ZAM_FILE, zam, clear_cache=False)
-        save_data(HIST_FILE, hist, clear_cache=False)
+        save_data(ZAM_FILE, zam)
+        save_data(HIST_FILE, hist)
         if len(nowe_etyk) != len(etyk_data):
-            save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=False)
+            save_data(ETYKIETY_FILE, nowe_etyk)
             
-        st.cache_data.clear()
         time.sleep(0.5)
 
 def restore_from_history(order_id):
@@ -190,17 +181,14 @@ def restore_from_history(order_id):
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
-        
-        save_data(ZAM_FILE, zam, clear_cache=False)
-        save_data(HIST_FILE, hist, clear_cache=False)
-        st.cache_data.clear()
+        save_data(ZAM_FILE, zam)
+        save_data(HIST_FILE, hist)
         time.sleep(0.5)
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
     dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
-    save_data(DYSPOZYCJE_FILE, dyspo, clear_cache=False)
-    st.cache_data.clear()
+    save_data(DYSPOZYCJE_FILE, dyspo)
     time.sleep(0.5)
 
 # --- 4. SESJA I LOGOWANIE ---
@@ -241,7 +229,6 @@ else:
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
         
         if c3.button("🔄 Odśwież", use_container_width=True):
-            st.cache_data.clear()
             st.rerun()
             
         if c4.button("Wyloguj się", use_container_width=True):
@@ -294,7 +281,7 @@ else:
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
-                                    save_data(ETYKIETY_FILE, etyk_baza, clear_cache=False)
+                                    save_data(ETYKIETY_FILE, etyk_baza)
                                 
                                 zam_data.append({
                                     "id": new_id, 
@@ -303,11 +290,10 @@ else:
                                     "termin": termin.strftime("%Y-%m-%d"), 
                                     "ma_etykiete": "True" if plik_etykiety else "False",
                                     "typ_wysylki": typ_wysylki,
-                                    "postep": "[]" # Inicjalizacja pustego postępu
+                                    "postep": "[]"
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
-                                save_data(ZAM_FILE, zam_data, clear_cache=False)
-                                st.cache_data.clear()
+                                save_data(ZAM_FILE, zam_data)
                                 time.sleep(0.5)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
@@ -321,7 +307,6 @@ else:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         
-                        # ZMIANA: Wizualizacja statusu pakowania dla Szefa
                         linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
                         try:
                             postep = json.loads(str(z.get('postep', '[]')))
@@ -340,9 +325,8 @@ else:
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             nowe_zam = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
-                            save_data(ZAM_FILE, nowe_zam, clear_cache=False)
-                            usun_etykiete(z['id'], clear_cache=False) 
-                            st.cache_data.clear()
+                            save_data(ZAM_FILE, nowe_zam)
+                            usun_etykiete(z['id']) 
                             time.sleep(0.5)
                             st.rerun()
 
@@ -354,7 +338,7 @@ else:
                     with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
                         co_html = str(h.get('co', '')).replace('\n', '<br>')
-                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Zawartość:**<br>{co_html}", unsafe_allow_html=True)
+                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Szczegóły:**<br>{co_html}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
@@ -362,8 +346,7 @@ else:
                 with st.expander("⚙️ Zaawansowana administracja rekordami"):
                     edited_hist = st.data_editor(hist_data, num_rows="dynamic", use_container_width=True)
                     if st.button("Zapisz zmiany w bazie zamówień"):
-                        save_data(HIST_FILE, edited_hist, clear_cache=False)
-                        st.cache_data.clear()
+                        save_data(HIST_FILE, edited_hist)
                         time.sleep(0.5)
                         st.toast("Zaktualizowano.", icon="💾")
 
@@ -376,8 +359,7 @@ else:
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
                             dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc_dysp, "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                            save_data(DYSPOZYCJE_FILE, dyspo_data, clear_cache=False)
-                            st.cache_data.clear()
+                            save_data(DYSPOZYCJE_FILE, dyspo_data)
                             time.sleep(0.5)
                             st.rerun()
             with col_d2:
@@ -388,8 +370,7 @@ else:
                         with st.container(border=True):
                             st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
                             if st.button("Usuń", key=f"del_dysp_{d['id']}"):
-                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])], clear_cache=False)
-                                st.cache_data.clear()
+                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])])
                                 time.sleep(0.5)
                                 st.rerun()
                                 
@@ -412,8 +393,7 @@ else:
                                     if str(item['id']) == str(z['id']):
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                                save_data(ZWROTY_FILE, zwroty_data, clear_cache=False)
-                                st.cache_data.clear()
+                                save_data(ZWROTY_FILE, zwroty_data)
                                 time.sleep(0.5)
                                 st.rerun()
             st.divider()
@@ -434,7 +414,6 @@ else:
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
         if c2.button("🔄 Odśwież", use_container_width=True): 
-            st.cache_data.clear()
             st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
@@ -453,7 +432,6 @@ else:
                 zam_kurier = [z for z in zam_data if "Kurier" in str(z.get('typ_wysylki', ''))]
                 zam_wlasna = [z for z in zam_data if "Kurier" not in str(z.get('typ_wysylki', ''))]
                 
-                # ZAKŁADKA 1: KURIER
                 with tab_kurier:
                     if not zam_kurier:
                         st.info("Brak przesyłek kurierskich w kolejce.")
@@ -473,7 +451,6 @@ else:
 
                                     st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
                                     
-                                    # ZMIANA: Checkboxy postępu (KURIER)
                                     st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Do spakowania:</div>", unsafe_allow_html=True)
                                     linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
                                     
@@ -494,8 +471,7 @@ else:
                                         for zam in zam_data:
                                             if zam['id'] == z['id']:
                                                 zam['postep'] = json.dumps(nowy_postep)
-                                        save_data(ZAM_FILE, zam_data, clear_cache=False)
-                                        st.cache_data.clear()
+                                        save_data(ZAM_FILE, zam_data)
                                         time.sleep(0.5)
                                         st.rerun()
                                     
@@ -510,7 +486,6 @@ else:
                                         move_to_history(z['id'])
                                         st.rerun()
 
-                # ZAKŁADKA 2: DOSTAWA WŁASNA
                 with tab_bezposrednio:
                     if not zam_wlasna:
                         st.info("Brak dostaw bezpośrednich w kolejce.")
@@ -530,7 +505,6 @@ else:
 
                                     st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
                                     
-                                    # ZMIANA: Checkboxy postępu (BEZPOŚREDNIO)
                                     st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Do spakowania:</div>", unsafe_allow_html=True)
                                     linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
                                     
@@ -551,8 +525,7 @@ else:
                                         for zam in zam_data:
                                             if zam['id'] == z['id']:
                                                 zam['postep'] = json.dumps(nowy_postep)
-                                        save_data(ZAM_FILE, zam_data, clear_cache=False)
-                                        st.cache_data.clear()
+                                        save_data(ZAM_FILE, zam_data)
                                         time.sleep(0.5)
                                         st.rerun()
 
@@ -591,8 +564,7 @@ else:
                     if st.form_submit_button("ZAREJESTRUJ ZWROT", type="primary"):
                         if nr_zwr:
                             zwroty_data.insert(0, {"id": str(uuid.uuid4()), "nr": nr_zwr, "stan": stan_zwr, "powod": powod_zwr, "notatki": notatki_zwr, "status": "Nowy", "data": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                            save_data(ZWROTY_FILE, zwroty_data, clear_cache=False)
-                            st.cache_data.clear()
+                            save_data(ZWROTY_FILE, zwroty_data)
                             time.sleep(0.5)
                             st.toast("Zarejestrowano!", icon="✅")
                             st.rerun()
