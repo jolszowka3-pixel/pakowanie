@@ -14,35 +14,83 @@ st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="�
 # --- 2. PROFESJONALNY CSS ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f4f6f9; }
-    .block-container { padding-top: 2rem; max-width: 98%; padding-bottom: 2rem; }
+    .stApp { background-color: #f1f5f9; }
+    .block-container { padding-top: 2.5rem; max-width: 96%; padding-bottom: 2rem; }
     #MainMenu {visibility: hidden;} 
     header {visibility: hidden;} 
     footer {visibility: hidden;} 
     [data-testid="collapsedControl"] {display: none !important;} 
     div[data-testid="stVerticalBlock"] div[style*="border"] {
-        border-radius: 16px !important;
+        border-radius: 12px !important;
         background-color: #ffffff !important;
-        border: none !important;
-        box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.08) !important;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border: 1px solid #e2e8f0 !important;
+        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.05), 0 8px 10px -6px rgba(15, 23, 42, 0.01) !important;
+        padding: 24px !important;
+        transition: all 0.3s ease;
     }
     div[data-testid="stVerticalBlock"] div[style*="border"]:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 20px 40px -5px rgba(15, 23, 42, 0.12) !important;
+        box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.08), 0 10px 10px -5px rgba(15, 23, 42, 0.03) !important;
+        transform: translateY(-2px);
     }
     button[kind="primary"] {
-        background-color: #1e3a8a !important; 
+        background-color: #1e293b !important; 
         color: #ffffff !important;
-        border-radius: 8px !important;
-        border: none !important;
-        box-shadow: 0 4px 10px rgba(30, 58, 138, 0.2) !important;
+        border-radius: 6px !important;
+        border: 1px solid #1e293b !important;
         font-weight: 600 !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase;
         letter-spacing: 0.5px;
-        transition: all 0.2s;
+        padding: 0.6rem 1.5rem !important;
+        width: 100% !important;
+        box-shadow: 0 4px 6px -1px rgba(30, 41, 59, 0.15) !important;
+        transition: all 0.2s ease;
     }
-    button[kind="primary"]:hover { background-color: #172554 !important; box-shadow: 0 6px 15px rgba(30, 58, 138, 0.3) !important; }
-    div[data-testid="stMetricValue"] { color: #1e3a8a !important; font-weight: 800 !important; }
+    button[kind="primary"]:hover { 
+        background-color: #334155 !important; 
+        box-shadow: 0 6px 12px -2px rgba(30, 41, 59, 0.25) !important;
+    }
+    button[kind="secondary"] {
+        background-color: #ffffff !important;
+        color: #475569 !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+        transition: all 0.2s ease;
+    }
+    button[kind="secondary"]:hover {
+        background-color: #f8fafc !important;
+        border-color: #94a3b8 !important;
+        color: #1e293b !important;
+    }
+    div[data-testid="stMetricValue"] { 
+        color: #0f172a !important; 
+        font-weight: 800 !important; 
+        font-size: 2.2rem !important;
+    }
+    div[data-testid="stMetricLabel"] { 
+        color: #64748b !important; 
+        font-weight: 600 !important; 
+        text-transform: uppercase; 
+        font-size: 0.75rem !important; 
+        letter-spacing: 0.5px;
+    }
+    h1, h2, h3, h4, h5 { 
+        color: #0f172a !important; 
+        font-weight: 800 !important; 
+        letter-spacing: -0.03em !important;
+    }
+    button[data-baseweb="tab"] { 
+        font-weight: 600 !important; 
+        color: #64748b !important; 
+        font-size: 0.9rem !important;
+    }
+    button[aria-selected="true"] { 
+        color: #1e293b !important; 
+        border-bottom: 2px solid #1e293b !important;
+    }
+    hr { border-color: #e2e8f0 !important; margin: 1.5rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,9 +106,10 @@ ETYKIETY_FILE = "Etykiety"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
+# ZMIANA: Dodano 'typ_wysylki' do nagłówków
 SHEET_HEADERS = {
-    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete"],
-    "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania"],
+    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "typ_wysylki"],
+    "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania", "typ_wysylki"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
     "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"],
     "Etykiety": ["zam_id", "czesc", "dane"]
@@ -156,7 +205,6 @@ else:
 
     # --- PANEL ADMINISTRATORA ---
     if st.session_state.rola == 'szef':
-        # Nagłówek Panelu Szefa z przyciskiem odświeżania
         c1, c2, c3, c4 = st.columns([5, 2, 1.5, 1.5])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
@@ -196,6 +244,10 @@ else:
                     st.markdown("#### Utwórz nowe zlecenie kompletacji")
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
+                    
+                    # ZMIANA: Przycisk wyboru rodzaju dostawy
+                    typ_wysylki = st.radio("Rodzaj dostawy", ["Kurier (Internet)", "Bezpośrednio do klienta"], horizontal=True)
+                    
                     co = st.text_area("Specyfikacja (co spakować)")
                     plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
@@ -212,7 +264,16 @@ else:
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
                                     save_data(ETYKIETY_FILE, etyk_baza)
-                                zam_data.append({"id": new_id, "nr": nr, "co": co, "termin": termin.strftime("%Y-%m-%d"), "ma_etykiete": "True" if plik_etykiety else "False"})
+                                
+                                # ZMIANA: Zapisujemy wybrany rodzaj dostawy do bazy
+                                zam_data.append({
+                                    "id": new_id, 
+                                    "nr": nr, 
+                                    "co": co, 
+                                    "termin": termin.strftime("%Y-%m-%d"), 
+                                    "ma_etykiete": "True" if plik_etykiety else "False",
+                                    "typ_wysylki": typ_wysylki
+                                })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
@@ -226,7 +287,8 @@ else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        info_text = f"**Co spakować:**<br>{z['co']}"
+                        # ZMIANA: Wyświetlanie rodzaju dostawy u szefa
+                        info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br>**Co spakować:**<br>{z['co']}"
                         if str(z.get('ma_etykiete')) == "True": info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
@@ -242,7 +304,7 @@ else:
                 for h in hist_data:
                     with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        col_info.markdown(f"**Szczegóły:**<br>{h.get('co')}", unsafe_allow_html=True)
+                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Szczegóły:**<br>{h.get('co')}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
@@ -332,11 +394,22 @@ else:
                 for i, z in enumerate(zam_data):
                     with cols[i % 3]:
                         with st.container(border=True):
+                            # ZMIANA: Etykietki u pracownika (Data + Rodzaj Wysyłki)
                             t_zlec = str(z.get('termin', '9999-12-31'))
                             if t_zlec < dzisiaj_str: badge = f"<div style='background-color: #fee2e2; color: #ef4444; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⚠️ ZALEGŁE: {t_zlec}</div>"
                             elif t_zlec == dzisiaj_str: badge = f"<div style='background-color: #fef3c7; color: #f59e0b; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px;'>⏱️ NA DZISIAJ</div>"
                             else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
-                            st.markdown(f"<div style='text-align:center;'>{badge}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                            
+                            typ_w = str(z.get('typ_wysylki', 'Brak danych'))
+                            if "Kurier" in typ_w: 
+                                badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
+                            elif "Bezpośrednio" in typ_w: 
+                                badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
+                            else: 
+                                badge_typ = ""
+
+                            st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                            
                             kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                             if kawalki:
                                 kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
@@ -384,7 +457,8 @@ else:
                 for h in hist_lim:
                     with st.expander(f"✔️ ZAM: {h.get('nr')} | {h.get('data_pakowania', '')}"):
                         c1, c2 = st.columns([3, 1])
-                        c1.write(f"**Zawartość:** {h.get('co')}")
+                        # ZMIANA: Widoczny typ w historii pracownika
+                        c1.write(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')} | **Zawartość:** {h.get('co')}")
                         if c2.button("Cofnij", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
