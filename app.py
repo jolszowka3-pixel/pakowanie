@@ -106,7 +106,6 @@ ETYKIETY_FILE = "Etykiety"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
-# ZMIANA: Dodano 'typ_wysylki' do nagłówków
 SHEET_HEADERS = {
     "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "typ_wysylki"],
     "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania", "typ_wysylki"],
@@ -115,44 +114,56 @@ SHEET_HEADERS = {
     "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
-@st.cache_data(ttl=10)
+# ZMIANA: Usunięto wadliwy podwójny cache. Teraz połączenie cache'uje dane optymalnie na 10 sekund.
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name, ttl=5)
+        df = conn.read(worksheet=sheet_name, ttl=10)
         df = df.dropna(how='all') 
         df = df.fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
-def save_data(sheet_name, data):
+# ZMIANA: Dodano opcję sterowania czyszczeniem cache'u
+def save_data(sheet_name, data, clear_cache=True):
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
-        st.cache_data.clear() 
+        if clear_cache:
+            st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
-def usun_etykiete(order_id):
+def usun_etykiete(order_id, clear_cache=True):
     etyk_data = load_data(ETYKIETY_FILE)
     nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
     if len(nowe_etyk) != len(etyk_data):
-        save_data(ETYKIETY_FILE, nowe_etyk)
+        save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=clear_cache)
 
 def move_to_history(order_id):
+    # ODCZYT WSZYSTKIEGO NA POCZĄTKU
     zam = load_data(ZAM_FILE)
     hist = load_data(HIST_FILE)
+    etyk_data = load_data(ETYKIETY_FILE)
+    
     order = next((x for x in zam if str(x.get('id')) == str(order_id)), None)
     if order:
         order['data_pakowania'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         hist.insert(0, order)
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
-        save_data(ZAM_FILE, zam)
-        save_data(HIST_FILE, hist)
-        usun_etykiete(order_id)
+        nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
+        
+        # ZAPIS WSZYSTKIEGO BEZ RESETU PAMIĘCI
+        save_data(ZAM_FILE, zam, clear_cache=False)
+        save_data(HIST_FILE, hist, clear_cache=False)
+        if len(nowe_etyk) != len(etyk_data):
+            save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=False)
+            
+        # RESET PAMIĘCI TYLKO RAZ NA SAM KONIEC
+        st.cache_data.clear()
 
 def restore_from_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -164,13 +175,15 @@ def restore_from_history(order_id):
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
-        save_data(ZAM_FILE, zam)
-        save_data(HIST_FILE, hist)
+        
+        save_data(ZAM_FILE, zam, clear_cache=False)
+        save_data(HIST_FILE, hist, clear_cache=False)
+        st.cache_data.clear()
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
     dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
-    save_data(DYSPOZYCJE_FILE, dyspo)
+    save_data(DYSPOZYCJE_FILE, dyspo, clear_cache=True)
 
 # --- 4. SESJA I LOGOWANIE ---
 if 'rola' not in st.session_state: 
@@ -262,7 +275,7 @@ else:
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
-                                    save_data(ETYKIETY_FILE, etyk_baza)
+                                    save_data(ETYKIETY_FILE, etyk_baza, clear_cache=False)
                                 
                                 zam_data.append({
                                     "id": new_id, 
@@ -273,7 +286,8 @@ else:
                                     "typ_wysylki": typ_wysylki
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
-                                save_data(ZAM_FILE, zam_data)
+                                save_data(ZAM_FILE, zam_data, clear_cache=False)
+                                st.cache_data.clear() # Czyścimy dopiero na końcu
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
                         else: st.toast("Wypełnij wymagane pola formularza.", icon="❗️")
@@ -290,8 +304,9 @@ else:
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             nowe_zam = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
-                            save_data(ZAM_FILE, nowe_zam)
-                            usun_etykiete(z['id']) 
+                            save_data(ZAM_FILE, nowe_zam, clear_cache=False)
+                            usun_etykiete(z['id'], clear_cache=False) 
+                            st.cache_data.clear()
                             st.rerun()
 
         with t3:
@@ -387,7 +402,6 @@ else:
             if not zam_data: 
                 st.markdown("<div style='text-align: center; padding: 100px 0;'><h1 style='color: #94a3b8;'>Brak aktywnych zleceń</h1></div>", unsafe_allow_html=True)
             else:
-                # --- PODZIAŁ NA PODZAKŁADKI KURIER I BEZPOŚREDNIO ---
                 tab_kurier, tab_bezposrednio = st.tabs(["📦 WYSYŁKI KURIERSKIE", "🚚 BEZPOŚREDNIO DO KLIENTA"])
                 etyk_wszystkie = load_data(ETYKIETY_FILE)
                 
@@ -424,7 +438,7 @@ else:
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
                                     st.write("") 
-                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_k_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
 
@@ -458,7 +472,7 @@ else:
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
                                     st.write("") 
-                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_{z['id']}", use_container_width=True, type="primary"):
+                                    if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_w_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
 
