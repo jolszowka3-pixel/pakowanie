@@ -123,9 +123,10 @@ ETYKIETY_FILE = "Etykiety"
 HASLO_SZEFA = "admin123"
 HASLO_PRACOWNIKA = "paka123"
 
+# ZMIANA: Dodano kolumnę "postep" (postęp pakowania)
 SHEET_HEADERS = {
-    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "typ_wysylki"],
-    "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania", "typ_wysylki"],
+    "Zamowienia": ["id", "nr", "co", "termin", "ma_etykiete", "typ_wysylki", "postep"],
+    "Historia": ["id", "nr", "co", "termin", "ma_etykiete", "data_pakowania", "typ_wysylki", "postep"],
     "Dyspozycje": ["id", "tresc", "data_dodania"],
     "Zwroty": ["id", "nr", "stan", "powod", "notatki", "status", "data", "data_rozpatrzenia"],
     "Etykiety": ["zam_id", "czesc", "dane"]
@@ -171,7 +172,6 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
         
-        # Zapis bezpieczny (bez ciągłego czyszczenia)
         save_data(ZAM_FILE, zam, clear_cache=False)
         save_data(HIST_FILE, hist, clear_cache=False)
         if len(nowe_etyk) != len(etyk_data):
@@ -276,7 +276,10 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     typ_wysylki = st.radio("Rodzaj dostawy", ["Kurier (Internet)", "Bezpośrednio do klienta"], horizontal=True)
+                    
+                    st.caption("Wpisz każdy produkt w osobnej linii, aby stworzyć listę dla pracownika:")
                     co = st.text_area("Specyfikacja (co spakować)")
+                    
                     plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
@@ -299,7 +302,8 @@ else:
                                     "co": co, 
                                     "termin": termin.strftime("%Y-%m-%d"), 
                                     "ma_etykiete": "True" if plik_etykiety else "False",
-                                    "typ_wysylki": typ_wysylki
+                                    "typ_wysylki": typ_wysylki,
+                                    "postep": "[]" # Inicjalizacja pustego postępu
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
                                 save_data(ZAM_FILE, zam_data, clear_cache=False)
@@ -316,8 +320,23 @@ else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br>**Co spakować:**<br>{z['co']}"
+                        
+                        # ZMIANA: Wizualizacja statusu pakowania dla Szefa
+                        linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
+                        try:
+                            postep = json.loads(str(z.get('postep', '[]')))
+                            if not isinstance(postep, list): postep = []
+                        except: postep = []
+                        while len(postep) < len(linie): postep.append(False)
+                        
+                        co_html = ""
+                        for idx, linia in enumerate(linie):
+                            znak = "✅" if postep[idx] else "⏳"
+                            co_html += f"<div style='margin-bottom: 4px;'>{znak} {linia}</div>"
+                        
+                        info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br><br>**Postęp kompletacji:**<br>{co_html}"
                         if str(z.get('ma_etykiete')) == "True": info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
+                        
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             nowe_zam = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
@@ -334,7 +353,8 @@ else:
                 for h in hist_data:
                     with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Szczegóły:**<br>{h.get('co')}", unsafe_allow_html=True)
+                        co_html = str(h.get('co', '')).replace('\n', '<br>')
+                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Zawartość:**<br>{co_html}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
@@ -433,6 +453,7 @@ else:
                 zam_kurier = [z for z in zam_data if "Kurier" in str(z.get('typ_wysylki', ''))]
                 zam_wlasna = [z for z in zam_data if "Kurier" not in str(z.get('typ_wysylki', ''))]
                 
+                # ZAKŁADKA 1: KURIER
                 with tab_kurier:
                     if not zam_kurier:
                         st.info("Brak przesyłek kurierskich w kolejce.")
@@ -447,14 +468,36 @@ else:
                                     else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
                                     
                                     typ_w = str(z.get('typ_wysylki', 'Brak danych'))
-                                    if "Kurier" in typ_w: 
-                                        badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
-                                    elif "Bezpośrednio" in typ_w: 
-                                        badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
-                                    else: 
-                                        badge_typ = ""
+                                    if "Kurier" in typ_w: badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
+                                    else: badge_typ = ""
 
-                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
+                                    
+                                    # ZMIANA: Checkboxy postępu (KURIER)
+                                    st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Do spakowania:</div>", unsafe_allow_html=True)
+                                    linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
+                                    
+                                    try:
+                                        postep = json.loads(str(z.get('postep', '[]')))
+                                        if not isinstance(postep, list): postep = []
+                                    except: postep = []
+                                    while len(postep) < len(linie): postep.append(False)
+                                    
+                                    nowy_postep = []
+                                    for idx, linia in enumerate(linie):
+                                        zaznaczone = st.checkbox(linia, value=postep[idx], key=f"chk_k_{z['id']}_{idx}")
+                                        nowy_postep.append(zaznaczone)
+                                        
+                                    st.write("<br>", unsafe_allow_html=True)
+                                    
+                                    if st.button("💾 ZAPISZ POSTĘP", key=f"prog_k_{z['id']}", use_container_width=True, type="secondary"):
+                                        for zam in zam_data:
+                                            if zam['id'] == z['id']:
+                                                zam['postep'] = json.dumps(nowy_postep)
+                                        save_data(ZAM_FILE, zam_data, clear_cache=False)
+                                        st.cache_data.clear()
+                                        time.sleep(0.5)
+                                        st.rerun()
                                     
                                     kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                                     if kawalki:
@@ -462,11 +505,12 @@ else:
                                         pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
-                                    st.write("") 
+                                        
                                     if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_k_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
 
+                # ZAKŁADKA 2: DOSTAWA WŁASNA
                 with tab_bezposrednio:
                     if not zam_wlasna:
                         st.info("Brak dostaw bezpośrednich w kolejce.")
@@ -481,22 +525,44 @@ else:
                                     else: badge = f"<div style='background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 6px; font-weight: 700; display: inline-block; margin-bottom: 10px;'>📅 Termin: {t_zlec}</div>"
                                     
                                     typ_w = str(z.get('typ_wysylki', 'Brak danych'))
-                                    if "Kurier" in typ_w: 
-                                        badge_typ = f"<div style='background-color: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>📦 KURIER</div>"
-                                    elif "Bezpośrednio" in typ_w: 
-                                        badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
-                                    else: 
-                                        badge_typ = ""
+                                    if "Bezpośrednio" in typ_w: badge_typ = f"<div style='background-color: #f3e8ff; color: #6b21a8; padding: 4px 10px; border-radius: 6px; font-weight: 800; display: inline-block; margin-bottom: 10px; margin-left: 8px;'>🚚 BEZPOŚREDNIO</div>"
+                                    else: badge_typ = ""
 
-                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
                                     
+                                    # ZMIANA: Checkboxy postępu (BEZPOŚREDNIO)
+                                    st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Do spakowania:</div>", unsafe_allow_html=True)
+                                    linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
+                                    
+                                    try:
+                                        postep = json.loads(str(z.get('postep', '[]')))
+                                        if not isinstance(postep, list): postep = []
+                                    except: postep = []
+                                    while len(postep) < len(linie): postep.append(False)
+                                    
+                                    nowy_postep = []
+                                    for idx, linia in enumerate(linie):
+                                        zaznaczone = st.checkbox(linia, value=postep[idx], key=f"chk_w_{z['id']}_{idx}")
+                                        nowy_postep.append(zaznaczone)
+                                        
+                                    st.write("<br>", unsafe_allow_html=True)
+                                    
+                                    if st.button("💾 ZAPISZ POSTĘP", key=f"prog_w_{z['id']}", use_container_width=True, type="secondary"):
+                                        for zam in zam_data:
+                                            if zam['id'] == z['id']:
+                                                zam['postep'] = json.dumps(nowy_postep)
+                                        save_data(ZAM_FILE, zam_data, clear_cache=False)
+                                        st.cache_data.clear()
+                                        time.sleep(0.5)
+                                        st.rerun()
+
                                     kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                                     if kawalki:
                                         kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
                                         pdf_b64 = "".join([str(e.get('dane', '')) for e in kawalki])
                                         html_code = f"<html><body><button style='width: 100%; padding: 0.5rem; background: #f8fafc; color: #1e3a8a; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; height: 45px;' onclick='printPDF()'>🖨️ DRUKUJ ETYKIETĘ</button><script>function printPDF() {{ const b64 = '{pdf_b64}'; const byteCharacters = atob(b64); const byteNumbers = new Array(byteCharacters.length); for (let i = 0; i < byteCharacters.length; i++) {{ byteNumbers[i] = byteCharacters.charCodeAt(i); }} const byteArray = new Uint8Array(byteNumbers); const blob = new Blob([byteArray], {{type: 'application/pdf'}}); const blobUrl = URL.createObjectURL(blob); const printFrame = document.createElement('iframe'); printFrame.style.display = 'none'; printFrame.src = blobUrl; document.body.appendChild(printFrame); printFrame.onload = function() {{ setTimeout(function() {{ try {{ printFrame.contentWindow.focus(); printFrame.contentWindow.print(); }} catch (e) {{ window.open(blobUrl, '_blank'); }} }}, 250); }}; }}</script></body></html>"
                                         components.html(html_code, height=55)
-                                    st.write("") 
+                                        
                                     if st.button("ZAKOŃCZ ZLECENIE", key=f"kds_w_{z['id']}", use_container_width=True, type="primary"):
                                         move_to_history(z['id'])
                                         st.rerun()
@@ -539,7 +605,8 @@ else:
                 for h in hist_lim:
                     with st.expander(f"✔️ ZAM: {h.get('nr')} | {h.get('data_pakowania', '')}"):
                         c1, c2 = st.columns([3, 1])
-                        c1.write(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')} | **Zawartość:** {h.get('co')}")
+                        co_html = str(h.get('co', '')).replace('\n', '<br>')
+                        c1.markdown(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')}<br>**Zawartość:**<br>{co_html}", unsafe_allow_html=True)
                         if c2.button("Cofnij", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
