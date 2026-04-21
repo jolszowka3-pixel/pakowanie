@@ -8,13 +8,13 @@ import time
 from streamlit_gsheets import GSheetsConnection
 import streamlit.components.v1 as components
 from datetime import datetime, date
-from streamlit_autorefresh import st_autorefresh # NOWY IMPORT
+from streamlit_autorefresh import st_autorefresh
 
 # --- 1. KONFIGURACJA STRONY ---
 st.set_page_config(page_title="System Zarządzania Wysyłką", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
-# --- AUTO-ODŚWIEŻANIE (Działa w tle co 10 sekund - 10000 milisekund) ---
-# Daje to złudzenie synchronizacji Real-Time dla obu ekranów bez klikania przycisku
+# --- AUTO-ODŚWIEŻANIE ---
+# Wymusza odświeżenie strony co 10 sekund, zapewniając synchronizację między Szefem a Pracownikiem
 st_autorefresh(interval=10000, limit=None, key="data_refresher")
 
 # --- 2. PROFESJONALNY CSS (Enterprise Design) ---
@@ -131,10 +131,9 @@ SHEET_HEADERS = {
     "Etykiety": ["zam_id", "czesc", "dane"]
 }
 
-# ZMIANA: Całkowite wyłączenie cache_data. Zawsze odczyt "na żywo".
+# ttl=0 usuwa problem starych danych
 def load_data(sheet_name):
     try:
-        # ttl=0 oznacza: pomiń pamięć, pytaj bazę Google przy każdym uruchomieniu funkcji
         df = conn.read(worksheet=sheet_name, ttl=0)
         df = df.dropna(how='all') 
         df = df.fillna("") 
@@ -174,8 +173,7 @@ def move_to_history(order_id):
         save_data(HIST_FILE, hist)
         if len(nowe_etyk) != len(etyk_data):
             save_data(ETYKIETY_FILE, nowe_etyk)
-        
-        # Mikro-pauza dla Google po 3 szybkich zapisach
+            
         time.sleep(0.5)
 
 def restore_from_history(order_id):
@@ -188,7 +186,6 @@ def restore_from_history(order_id):
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
-        
         save_data(ZAM_FILE, zam)
         save_data(HIST_FILE, hist)
         time.sleep(0.5)
@@ -224,7 +221,6 @@ if st.session_state.rola is None:
                         st.toast("Nieprawidłowe hasło!", icon="❌")
 
 else:
-    # Ładowanie danych (Teraz zawsze aktualnych)
     zam_data = load_data(ZAM_FILE)
     hist_data = load_data(HIST_FILE)
     dyspo_data = load_data(DYSPOZYCJE_FILE)
@@ -236,8 +232,7 @@ else:
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
         
-        # Zostawiamy przycisk "Odśwież" jako wymuszenie ręczne, mimo istnienia autorefresh
-        if c3.button("🔄 Odśwież", use_container_width=True):
+        if c3.button("🔄 Odśwież ręcznie", use_container_width=True):
             st.rerun()
             
         if c4.button("Wyloguj się", use_container_width=True):
@@ -350,6 +345,7 @@ else:
                         if tresc_dysp:
                             dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc_dysp, "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")})
                             save_data(DYSPOZYCJE_FILE, dyspo_data)
+                            time.sleep(0.5)
                             st.rerun()
             with col_d2:
                 st.markdown("#### Aktywne zadania")
@@ -360,6 +356,7 @@ else:
                             st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
                             if st.button("Usuń", key=f"del_dysp_{d['id']}"):
                                 save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])])
+                                time.sleep(0.5)
                                 st.rerun()
                                 
         with t5:
@@ -382,6 +379,7 @@ else:
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                                 save_data(ZWROTY_FILE, zwroty_data)
+                                time.sleep(0.5)
                                 st.rerun()
             st.divider()
             with st.expander("📁 Archiwum rozwiązanych zwrotów"):
@@ -389,7 +387,6 @@ else:
 
     # --- TERMINAL PRACOWNIKA ---
     elif st.session_state.rola == 'pracownik':
-        # Logika Audio dla nowych zadań
         if 'znane_zam' not in st.session_state: st.session_state.znane_zam = {str(z.get('id')) for z in zam_data}
         if 'znane_dysp' not in st.session_state: st.session_state.znane_dysp = {str(d.get('id')) for d in dyspo_data}
         akt_zam_ids = {str(z.get('id')) for z in zam_data}
@@ -401,7 +398,7 @@ else:
 
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
-        if c2.button("🔄 Odśwież", use_container_width=True): 
+        if c2.button("🔄 Odśwież ręcznie", use_container_width=True): 
             st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
@@ -513,6 +510,7 @@ else:
                         if nr_zwr:
                             zwroty_data.insert(0, {"id": str(uuid.uuid4()), "nr": nr_zwr, "stan": stan_zwr, "powod": powod_zwr, "notatki": notatki_zwr, "status": "Nowy", "data": datetime.now().strftime("%Y-%m-%d %H:%M")})
                             save_data(ZWROTY_FILE, zwroty_data)
+                            time.sleep(0.5)
                             st.toast("Zarejestrowano!", icon="✅")
                             st.rerun()
                         else: st.error("Podaj numer.")
