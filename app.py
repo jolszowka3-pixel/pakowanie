@@ -11,9 +11,10 @@ from datetime import datetime, date
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. KONFIGURACJA STRONY ---
-st.set_page_config(page_title="System Zarządzania Wysyłką", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="WMS Pakownia | System Zarządzania", page_icon="📦", layout="wide", initial_sidebar_state="collapsed")
 
 # --- AUTO-ODŚWIEŻANIE ---
+# Wymusza odświeżenie strony co 30 sekund (30000 ms). Synchronizuje panele bez blokowania API Google.
 st_autorefresh(interval=30000, limit=None, key="data_refresher")
 
 # --- 2. PROFESJONALNY CSS (Enterprise Design) ---
@@ -132,28 +133,31 @@ SHEET_HEADERS = {
 
 def load_data(sheet_name):
     try:
-        df = conn.read(worksheet=sheet_name, ttl=0)
+        # Pamięć 10 sekund - chroni przed limitem Google API
+        df = conn.read(worksheet=sheet_name, ttl=10)
         df = df.dropna(how='all') 
         df = df.fillna("") 
         return df.to_dict(orient="records")
     except Exception:
         return []
 
-def save_data(sheet_name, data):
+def save_data(sheet_name, data, clear_cache=True):
     if not data:
         df = pd.DataFrame(columns=SHEET_HEADERS.get(sheet_name, []))
     else:
         df = pd.DataFrame(data)
     try:
         conn.update(worksheet=sheet_name, data=df)
+        if clear_cache:
+            st.cache_data.clear() 
     except Exception as e:
         st.error(f"Błąd zapisu do Arkusza Google ({sheet_name}): {e}")
 
-def usun_etykiete(order_id):
+def usun_etykiete(order_id, clear_cache=True):
     etyk_data = load_data(ETYKIETY_FILE)
     nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
     if len(nowe_etyk) != len(etyk_data):
-        save_data(ETYKIETY_FILE, nowe_etyk)
+        save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=clear_cache)
 
 def move_to_history(order_id):
     zam = load_data(ZAM_FILE)
@@ -167,11 +171,13 @@ def move_to_history(order_id):
         zam = [x for x in zam if str(x.get('id')) != str(order_id)]
         nowe_etyk = [e for e in etyk_data if str(e.get('zam_id')) != str(order_id)]
         
-        save_data(ZAM_FILE, zam)
-        save_data(HIST_FILE, hist)
+        # Zapis bezpieczny (bez ciągłego czyszczenia)
+        save_data(ZAM_FILE, zam, clear_cache=False)
+        save_data(HIST_FILE, hist, clear_cache=False)
         if len(nowe_etyk) != len(etyk_data):
-            save_data(ETYKIETY_FILE, nowe_etyk)
+            save_data(ETYKIETY_FILE, nowe_etyk, clear_cache=False)
             
+        st.cache_data.clear()
         time.sleep(0.5)
 
 def restore_from_history(order_id):
@@ -184,14 +190,17 @@ def restore_from_history(order_id):
         zam.append(order)
         zam.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
         hist = [x for x in hist if str(x.get('id')) != str(order_id)]
-        save_data(ZAM_FILE, zam)
-        save_data(HIST_FILE, hist)
+        
+        save_data(ZAM_FILE, zam, clear_cache=False)
+        save_data(HIST_FILE, hist, clear_cache=False)
+        st.cache_data.clear()
         time.sleep(0.5)
 
 def move_dyspozycja_to_history(dysp_id):
     dyspo = load_data(DYSPOZYCJE_FILE)
     dyspo = [x for x in dyspo if str(x.get('id')) != str(dysp_id)]
-    save_data(DYSPOZYCJE_FILE, dyspo)
+    save_data(DYSPOZYCJE_FILE, dyspo, clear_cache=False)
+    st.cache_data.clear()
     time.sleep(0.5)
 
 # --- 4. SESJA I LOGOWANIE ---
@@ -231,7 +240,8 @@ else:
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>PANEL SZEFA</h2>", unsafe_allow_html=True)
         c2.markdown("<div style='text-align: right; margin-top: 5px;'><b>Użytkownik:</b> Administrator 👨‍💼</div>", unsafe_allow_html=True)
         
-        if c3.button("🔄 Odśwież ręcznie", use_container_width=True):
+        if c3.button("🔄 Odśwież", use_container_width=True):
+            st.cache_data.clear()
             st.rerun()
             
         if c4.button("Wyloguj się", use_container_width=True):
@@ -266,10 +276,7 @@ else:
                     nr = st.text_input("Indeks / Numer zamówienia")
                     termin = st.date_input("Wymagany termin realizacji", value=date.today())
                     typ_wysylki = st.radio("Rodzaj dostawy", ["Kurier (Internet)", "Bezpośrednio do klienta"], horizontal=True)
-                    
-                    # ZMIANA: Jasna instrukcja dla szefa
-                    co = st.text_area("Specyfikacja (wpisz każdy produkt w osobnej linii)")
-                    
+                    co = st.text_area("Specyfikacja (co spakować)")
                     plik_etykiety = st.file_uploader("Załącz list przewozowy / etykietę (PDF)", type=["pdf"])
                     if st.form_submit_button("PRZEKAŻ NA MAGAZYN", type="primary"):
                         if nr and co:
@@ -284,7 +291,7 @@ else:
                                     for idx, i in enumerate(range(0, len(pdf_b64), chunk_size)):
                                         chunk = pdf_b64[i:i+chunk_size]
                                         etyk_baza.append({"zam_id": new_id, "czesc": idx, "dane": chunk})
-                                    save_data(ETYKIETY_FILE, etyk_baza)
+                                    save_data(ETYKIETY_FILE, etyk_baza, clear_cache=False)
                                 
                                 zam_data.append({
                                     "id": new_id, 
@@ -295,7 +302,8 @@ else:
                                     "typ_wysylki": typ_wysylki
                                 })
                                 zam_data.sort(key=lambda x: str(x.get('termin', '9999-12-31')))
-                                save_data(ZAM_FILE, zam_data)
+                                save_data(ZAM_FILE, zam_data, clear_cache=False)
+                                st.cache_data.clear()
                                 time.sleep(0.5)
                                 st.toast(f"Pomyślnie dodano: {nr}", icon="✅")
                                 st.rerun() 
@@ -308,15 +316,14 @@ else:
                 for z in zam_data:
                     with st.expander(f"ZAM: {z['nr']}  |  Wymagany termin: {z.get('termin', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        # ZMIANA: Formatyzacja nowych linii u szefa jako <br>
-                        co_html = str(z['co']).replace('\n', '<br>')
-                        info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br>**Co spakować:**<br>{co_html}"
+                        info_text = f"**Dostawa:** {z.get('typ_wysylki', 'Brak danych')}<br>**Co spakować:**<br>{z['co']}"
                         if str(z.get('ma_etykiete')) == "True": info_text += "<br><span style='color:#1e3a8a;'>📄 Etykieta w chmurze gotowa</span>"
                         col_info.markdown(info_text, unsafe_allow_html=True)
                         if col_action.button("Wycofaj (Usuń)", key=f"boss_cancel_{z['id']}", use_container_width=True):
                             nowe_zam = [x for x in zam_data if str(x.get('id')) != str(z['id'])]
-                            save_data(ZAM_FILE, nowe_zam)
-                            usun_etykiete(z['id']) 
+                            save_data(ZAM_FILE, nowe_zam, clear_cache=False)
+                            usun_etykiete(z['id'], clear_cache=False) 
+                            st.cache_data.clear()
                             time.sleep(0.5)
                             st.rerun()
 
@@ -327,9 +334,7 @@ else:
                 for h in hist_data:
                     with st.expander(f"✔️ ZAM: {h.get('nr')}  |  Wykonano: {h.get('data_pakowania', 'Brak')}"):
                         col_info, col_action = st.columns([4, 1])
-                        # ZMIANA: Formatyzacja nowych linii
-                        co_html = str(h.get('co', '')).replace('\n', '<br>')
-                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Szczegóły:**<br>{co_html}", unsafe_allow_html=True)
+                        col_info.markdown(f"**Dostawa:** {h.get('typ_wysylki', 'Brak danych')}<br>**Szczegóły:**<br>{h.get('co')}", unsafe_allow_html=True)
                         if col_action.button("Przywróć na produkcję", key=f"boss_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
@@ -337,7 +342,8 @@ else:
                 with st.expander("⚙️ Zaawansowana administracja rekordami"):
                     edited_hist = st.data_editor(hist_data, num_rows="dynamic", use_container_width=True)
                     if st.button("Zapisz zmiany w bazie zamówień"):
-                        save_data(HIST_FILE, edited_hist)
+                        save_data(HIST_FILE, edited_hist, clear_cache=False)
+                        st.cache_data.clear()
                         time.sleep(0.5)
                         st.toast("Zaktualizowano.", icon="💾")
 
@@ -350,7 +356,8 @@ else:
                     if st.form_submit_button("Wyślij Dyspozycję", type="primary"):
                         if tresc_dysp:
                             dyspo_data.insert(0, {"id": str(uuid.uuid4()), "tresc": tresc_dysp, "data_dodania": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                            save_data(DYSPOZYCJE_FILE, dyspo_data)
+                            save_data(DYSPOZYCJE_FILE, dyspo_data, clear_cache=False)
+                            st.cache_data.clear()
                             time.sleep(0.5)
                             st.rerun()
             with col_d2:
@@ -361,7 +368,8 @@ else:
                         with st.container(border=True):
                             st.markdown(f"**Wysłano:** {d.get('data_dodania')}<br>{d.get('tresc')}", unsafe_allow_html=True)
                             if st.button("Usuń", key=f"del_dysp_{d['id']}"):
-                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])])
+                                save_data(DYSPOZYCJE_FILE, [x for x in dyspo_data if str(x.get('id')) != str(d['id'])], clear_cache=False)
+                                st.cache_data.clear()
                                 time.sleep(0.5)
                                 st.rerun()
                                 
@@ -384,7 +392,8 @@ else:
                                     if str(item['id']) == str(z['id']):
                                         item['status'] = 'Rozpatrzony'
                                         item['data_rozpatrzenia'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                                save_data(ZWROTY_FILE, zwroty_data)
+                                save_data(ZWROTY_FILE, zwroty_data, clear_cache=False)
+                                st.cache_data.clear()
                                 time.sleep(0.5)
                                 st.rerun()
             st.divider()
@@ -404,7 +413,8 @@ else:
 
         c1, c2, c3 = st.columns([6, 1, 1])
         c1.markdown("<h2 style='color: #1e3a8a; margin-top: -15px; font-weight: 800;'>TERMINAL KOMPLETACJI</h2>", unsafe_allow_html=True)
-        if c2.button("🔄 Odśwież ręcznie", use_container_width=True): 
+        if c2.button("🔄 Odśwież", use_container_width=True): 
+            st.cache_data.clear()
             st.rerun()
         if c3.button("Wyloguj", use_container_width=True): 
             st.session_state.rola = None
@@ -444,14 +454,7 @@ else:
                                     else: 
                                         badge_typ = ""
 
-                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
-                                    
-                                    # ZMIANA: Checklista zamiast zwykłego tekstu
-                                    st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Specyfikacja pakowania:</div>", unsafe_allow_html=True)
-                                    linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
-                                    for idx, linia in enumerate(linie):
-                                        st.checkbox(linia, key=f"chk_{z['id']}_{idx}")
-                                    st.write("<br>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
                                     
                                     kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                                     if kawalki:
@@ -485,15 +488,8 @@ else:
                                     else: 
                                         badge_typ = ""
 
-                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'></div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align:center;'>{badge}{badge_typ}<div style='color: #64748b; font-size: 14px; font-weight: bold;'>Zlecenie Nr</div><div style='font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px;'>{z.get('nr')}</div><hr style='margin: 15px 0; border-top: 1px dashed #cbd5e1;'><div style='font-size: 20px; font-weight: 600; margin-bottom: 20px;'>{z.get('co')}</div></div>", unsafe_allow_html=True)
                                     
-                                    # ZMIANA: Checklista zamiast zwykłego tekstu
-                                    st.markdown("<div style='color: #64748b; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase;'>Specyfikacja pakowania:</div>", unsafe_allow_html=True)
-                                    linie = [l.strip() for l in str(z.get('co', '')).split('\n') if l.strip()]
-                                    for idx, linia in enumerate(linie):
-                                        st.checkbox(linia, key=f"chk_{z['id']}_{idx}")
-                                    st.write("<br>", unsafe_allow_html=True)
-
                                     kawalki = [e for e in etyk_wszystkie if str(e.get('zam_id')) == str(z['id'])]
                                     if kawalki:
                                         kawalki.sort(key=lambda x: int(x.get('czesc', 0)))
@@ -543,9 +539,7 @@ else:
                 for h in hist_lim:
                     with st.expander(f"✔️ ZAM: {h.get('nr')} | {h.get('data_pakowania', '')}"):
                         c1, c2 = st.columns([3, 1])
-                        # ZMIANA: Formatyzacja nowych linii
-                        co_html = str(h.get('co', '')).replace('\n', '<br>')
-                        c1.markdown(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')}<br>**Zawartość:**<br>{co_html}", unsafe_allow_html=True)
+                        c1.write(f"**Wysyłka:** {h.get('typ_wysylki', 'Brak danych')} | **Zawartość:** {h.get('co')}")
                         if c2.button("Cofnij", key=f"w_undo_{h['id']}", use_container_width=True):
                             restore_from_history(h['id'])
                             st.rerun()
